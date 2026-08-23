@@ -75,6 +75,17 @@ Nodes are stacked by their *measured* height, not a fixed row gap — a node wit
 four ports is half as tall again as one with none — and a node you drag stays
 exactly where you put it.
 
+### What a node tells you
+
+- The **method**, as a colour down the left edge
+- The **endpoint**, with a `{{base_url}}` prefix dimmed so the path reads first
+- A **spec strip** — how it authenticates, whether it carries a body and of what
+  kind, how many query, path and header rows ride along, and the host when that
+  is a literal
+- **Needs** and **gives**
+- The **last result** — status, time, size, assertions — or, if it has not been
+  run here yet, what it did *when it was recorded*
+
 ### The colour system
 
 The mark is a prism: one beam in, a spectrum out, and the interface takes that
@@ -88,6 +99,42 @@ literally.
 
 On a graph screen you read three kinds of thing at once — structure, data flow
 and results — and they must never share a colour.
+
+### Themes
+
+Dark, light, or follow the system — in Settings → Appearance. Following the
+system means exactly that: no attribute is stamped on the document, so the
+`prefers-color-scheme` block stays in charge and the app switches while it is
+open. An explicit choice wins over the machine in both directions.
+
+The light theme is not an inversion. The greys keep their blue cast, the
+spectrum moves to darker versions of the same three hues so it still reads as
+one family on a pale ground, and selection swaps from light to ink — same role,
+opposite value.
+
+## Settings
+
+**Every switch changes what Prism does**, and each one prints the name of the
+function that reads it. A settings page full of controls that are read nowhere
+is worse than no settings page, so the claim is made checkable — and a test
+fails the build if a setting names a home that does not exist.
+
+| | |
+| --- | --- |
+| **Appearance** | Theme; beam labels; ports on nodes |
+| **Sending** | Timeout; follow redirects; verify TLS; response size to keep |
+| **Safety** | Confirm before sending to production; mask credentials in the inspector |
+| **Data** | History length; clear history; reset preferences |
+
+Only these persist. Collections, environments, results and history live in
+memory and are gone when Prism closes.
+
+## Help
+
+Press **F1**, or the **?** in the bar. Eight sections covering getting started,
+the three levels, how to read a node, chaining, every assertion subject and
+operator, the export targets, the keyboard shortcuts, and exactly what leaves
+the machine.
 
 ---
 

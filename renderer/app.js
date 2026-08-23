@@ -71,7 +71,11 @@ const I = {
   down: '<path d="m6 9 6 6 6-6"/>',
   lock: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  flow: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H14a4 4 0 0 1 4 4v5.5"/>'
+  flow: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H14a4 4 0 0 1 4 4v5.5"/>',
+  pencil: '<path d="M4 20h4l10-10a2.8 2.8 0 0 0-4-4L4 16z"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  up: '<path d="M12 14V4"/><path d="m8 8 4-4 4 4"/><path d="M4 20h16"/>',
+  eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/>'
 }
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
@@ -105,6 +109,8 @@ const S = {
   respTab: 'brief',
   view: { x: 90, y: 70, z: 1 },
   split: 55,
+  /** 'split' | 'request' | 'response' — which half has the panel. */
+  pane: 'split',
   prefs: {}
 }
 
@@ -171,23 +177,30 @@ function paintBar() {
   const env = environment()
   $('envLabel').textContent = env ? env.name : 'No environment'
   $('envDot').className = `env-dot${env ? ' on' : ''}${env && /prod|live|release/i.test(env.name) ? ' risky' : ''}`
-  const theme = $('themeBtn')
-  if (theme) {
-    theme.title = `Theme: ${S.prefs.theme}`
-    theme.dataset.theme = S.prefs.theme
-  }
   $('runFlowBtn').disabled = !allFlows().some((f) => f.requests.length)
   $('exportBtn').disabled = !allRequests().length
 }
 
 /* ================================================================== tree */
 
+/* --------------------------------------------------------------- the tree
+
+   Every row is the same shape: twist, glyph, name, count, one actions button.
+   The actions button is always in the layout and only becomes visible on
+   hover, so nothing moves when the pointer crosses a row — a menu that shifts
+   the thing you were aiming at is a menu you misclick. */
+
+/** The row currently being renamed in place, if any. */
+let renaming = ''
+
 function paintTree() {
   const host = $('treeBody')
   host.replaceChildren()
 
   if (!S.collections.length) {
-    host.append(el('p', { class: 'tree-nothing', html: 'No collections yet.<br />Import a Rebind recording or a Postman collection.' }))
+    host.append(
+      el('p', { class: 'tree-nothing', html: 'No collections yet.<br />Import a Rebind recording or a Postman collection.' })
+    )
     return
   }
 
@@ -200,61 +213,46 @@ function paintTree() {
         const res = S.results.get(req.id)
         const state = S.busy.has(req.id) ? 'busy' : res ? (res.failed ? 'fail' : 'pass') : ''
         reqs.append(
-          el('div', { class: `req-row${req.id === S.pickedId ? ' on' : ''}`, title: req.url || req.name }, [
-            el('span', { class: `verb ${req.method.toLowerCase()}`, text: req.method }),
-            el('button', {
-              class: 'grow',
-              type: 'button',
-              style: 'border:0;background:none;text-align:left;padding:0;color:inherit;font:inherit',
-              text: req.name || 'Untitled',
-              onclick: () => pick(req.id)
-            }),
-            el('span', { class: `state ${state}` }),
-            el('button', {
-              class: 'rowbtn del',
-              type: 'button',
-              title: 'Delete this request',
-              'aria-label': `Delete request ${req.name}`,
-              html: ico(I.bin, 12, 1.9),
-              onclick: () => askDeleteRequest(req)
-            })
-          ])
+          treeRow({
+            cls: `req-row${req.id === S.pickedId ? ' on' : ''}`,
+            title: req.url || req.name,
+            lead: el('span', { class: `verb ${req.method.toLowerCase()}`, text: req.method }),
+            id: req.id,
+            name: req.name || 'Untitled',
+            onOpen: () => pick(req.id),
+            onRename: (next) => {
+              req.name = next
+              commit()
+            },
+            trail: el('span', { class: `state ${state}` }),
+            menu: () => requestMenu(req)
+          })
         )
       }
 
       flows.append(
         el('div', { class: `flow${flow.open === false ? ' shut' : ''}` }, [
-          el('div', { class: 'flow-row' }, [
-            el('button', {
-              class: 'twist',
-              type: 'button',
-              'aria-label': flow.open === false ? `Expand ${flow.name}` : `Collapse ${flow.name}`,
-              html: ico(I.down, 11, 2.4),
-              onclick: () => {
-                flow.open = flow.open === false
-                paintTree()
-              }
-            }),
-            el('span', { class: 'glyph', style: 'color:var(--ink-4);display:grid;place-items:center', html: ico(I.flow, 12, 1.8) }),
-            el('span', { class: 'grow', text: flow.name }),
-            el('span', { class: 'count', text: String(flow.requests.length) }),
-            el('button', {
-              class: 'rowbtn',
-              type: 'button',
-              title: 'Add a request',
-              'aria-label': `Add a request to ${flow.name}`,
-              html: ico(I.plus, 12, 2.2),
-              onclick: () => addRequest(flow)
-            }),
-            el('button', {
-              class: 'rowbtn del',
-              type: 'button',
-              title: 'Delete this flow',
-              'aria-label': `Delete flow ${flow.name}`,
-              html: ico(I.bin, 12, 1.9),
-              onclick: () => askDeleteFlow(col, flow)
-            })
-          ]),
+          treeRow({
+            cls: 'flow-row',
+            twist: () => {
+              flow.open = flow.open === false
+              paintTree()
+            },
+            open: flow.open !== false,
+            glyph: I.flow,
+            id: flow.id,
+            name: flow.name,
+            count: flow.requests.length,
+            onOpen: () => {
+              flow.open = flow.open === false
+              paintTree()
+            },
+            onRename: (next) => {
+              flow.name = next
+              commit()
+            },
+            menu: () => flowMenu(col, flow)
+          }),
           reqs
         ])
       )
@@ -262,41 +260,272 @@ function paintTree() {
 
     host.append(
       el('div', { class: `col${col.open === false ? ' shut' : ''}` }, [
-        el('div', { class: 'col-row' }, [
-          el('button', {
-            class: 'twist',
-            type: 'button',
-            'aria-label': col.open === false ? `Expand ${col.name}` : `Collapse ${col.name}`,
-            html: ico(I.down, 11, 2.4),
-            onclick: () => {
-              col.open = col.open === false
-              paintTree()
-            }
-          }),
-          el('span', { class: 'glyph', style: 'color:var(--ink-4);display:grid;place-items:center', html: ico(I.folder, 13, 1.8) }),
-          el('span', { class: 'grow', text: col.name }),
-          col.source && col.source !== 'canvas' ? el('span', { class: 'tag', text: sourceTag(col.source) }) : null,
-          el('button', {
-            class: 'rowbtn',
-            type: 'button',
-            title: 'Add a flow',
-            'aria-label': `Add a flow to ${col.name}`,
-            html: ico(I.plus, 12, 2.2),
-            onclick: () => addFlow(col)
-          }),
-          el('button', {
-            class: 'rowbtn del',
-            type: 'button',
-            title: 'Delete this collection',
-            'aria-label': `Delete collection ${col.name}`,
-            html: ico(I.bin, 12, 1.9),
-            onclick: () => askDeleteCollection(col)
-          })
-        ]),
+        treeRow({
+          cls: 'col-row',
+          twist: () => {
+            col.open = col.open === false
+            paintTree()
+          },
+          open: col.open !== false,
+          glyph: I.folder,
+          id: col.id,
+          name: col.name,
+          tag: col.source && col.source !== 'canvas' ? sourceTag(col.source) : '',
+          onOpen: () => {
+            col.open = col.open === false
+            paintTree()
+          },
+          onRename: (next) => {
+            col.name = next
+            commit()
+          },
+          menu: () => collectionMenu(col)
+        }),
         flows
       ])
     )
   }
+}
+
+/**
+ * One row of the tree.
+ *
+ * The name is a button until you rename it, at which point the same box
+ * becomes an input in place — no dialog, because renaming is a thing people do
+ * to six items in a row and a dialog each time is six dismissals.
+ */
+function treeRow({ cls, title, twist, open, glyph, lead, id, name, count, tag, trail, onOpen, onRename, menu }) {
+  const row = el('div', { class: cls, title })
+
+  if (twist) {
+    row.append(
+      el('button', {
+        class: 'twist',
+        type: 'button',
+        'aria-label': open ? `Collapse ${name}` : `Expand ${name}`,
+        html: ico(I.down, 11, 2.4),
+        onclick: (e) => {
+          e.stopPropagation()
+          twist()
+        }
+      })
+    )
+  }
+  if (glyph) row.append(el('span', { class: 'row-glyph', html: ico(glyph, 13, 1.8) }))
+  if (lead) row.append(lead)
+
+  if (renaming === id) {
+    const input = el('input', {
+      class: 'row-rename',
+      value: name,
+      'aria-label': 'Name',
+      onkeydown: (e) => {
+        if (e.key === 'Enter') e.target.blur()
+        if (e.key === 'Escape') {
+          renaming = ''
+          paintTree()
+        }
+      },
+      onblur: (e) => {
+        const next = e.target.value.trim()
+        renaming = ''
+        if (next && next !== name) onRename(next)
+        else paintTree()
+      }
+    })
+    row.append(input)
+    requestAnimationFrame(() => {
+      input.focus()
+      input.select()
+    })
+  } else {
+    row.append(el('button', { class: 'row-name', type: 'button', text: name, onclick: onOpen }))
+    if (count !== undefined) row.append(el('span', { class: 'count', text: String(count) }))
+    if (tag) row.append(el('span', { class: 'tag', text: tag }))
+    if (trail) row.append(trail)
+  }
+
+  const more = el('button', {
+    class: 'row-more',
+    type: 'button',
+    title: 'Actions',
+    'aria-label': `Actions for ${name}`,
+    'aria-haspopup': 'menu',
+    html: ico('<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>', 13, 1.6),
+    onclick: (e) => {
+      e.stopPropagation()
+      openMenu(e.currentTarget, menu())
+    }
+  })
+  row.append(more)
+
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault()
+    openMenu(more, menu())
+  })
+  return row
+}
+
+function startRename(id) {
+  renaming = id
+  paintTree()
+}
+
+/* ------------------------------------------------------------- the menus */
+
+function collectionMenu(col) {
+  const requests = col.flows.flatMap((f) => f.requests)
+  return [
+    { label: 'Rename', keys: 'F2', icon: I.pencil, run: () => startRename(col.id) },
+    { label: 'New flow', icon: I.plus, run: () => addFlow(col) },
+    { label: 'Duplicate', icon: I.copy, run: () => duplicateCollection(col) },
+    { sep: true },
+    { label: 'Run every flow', icon: I.play, disabled: !requests.length, run: () => runCollection(col) },
+    { label: 'Export collection', icon: I.up, disabled: !requests.length, run: () => openExport(col.flows[0], null) },
+    { sep: true },
+    { label: 'Collapse all flows', icon: I.down, run: () => {
+      for (const f of col.flows) f.open = false
+      paintTree()
+    } },
+    { sep: true },
+    { label: 'Delete collection', icon: I.bin, danger: true, run: () => askDeleteCollection(col) }
+  ]
+}
+
+function flowMenu(col, flow) {
+  return [
+    { label: 'Rename', keys: 'F2', icon: I.pencil, run: () => startRename(flow.id) },
+    { label: 'New request', icon: I.plus, run: () => addRequest(flow) },
+    { label: 'Duplicate', icon: I.copy, run: () => duplicateFlow(col, flow) },
+    { sep: true },
+    { label: 'Run flow', icon: I.play, disabled: !flow.requests.length, run: () => runFlow(flow) },
+    { label: 'Export flow', icon: I.up, disabled: !flow.requests.length, run: () => openExport(flow, null) },
+    { sep: true },
+    { label: 'Delete flow', icon: I.bin, danger: true, run: () => askDeleteFlow(col, flow) }
+  ]
+}
+
+function requestMenu(req) {
+  const flow = flowOf(req.id)
+  return [
+    { label: 'Rename', keys: 'F2', icon: I.pencil, run: () => startRename(req.id) },
+    { label: 'Open', icon: I.eye, run: () => pick(req.id) },
+    { label: 'Duplicate', icon: I.copy, run: () => duplicateRequest(flow, req) },
+    { sep: true },
+    { label: 'Send', keys: 'Ctrl ↵', icon: I.play, run: () => send(req) },
+    { label: 'Export request', icon: I.up, run: () => openExport(flow, req) },
+    { label: 'Copy as cURL', icon: I.copy, run: () => {
+      navigator.clipboard.writeText(generate('curl', { request: req, flow, environment: environment() }))
+      toast('ok', 'cURL copied')
+    } },
+    { sep: true },
+    { label: 'Delete request', icon: I.bin, danger: true, run: () => askDeleteRequest(req) }
+  ]
+}
+
+/* ------------------------------------------------------------ duplicating */
+
+/** A deep copy with fresh ids, so the two do not share rows or assertions. */
+function copyRequest(req) {
+  const clone = structuredClone(req)
+  clone.id = uid('req')
+  for (const key of ['query', 'pathParams', 'headers']) {
+    clone[key] = (clone[key] ?? []).map((r) => ({ ...r, id: uid('row') }))
+  }
+  clone.assertions = (clone.assertions ?? []).map((a) => ({ ...a, id: uid('as') }))
+  clone.captures = (clone.captures ?? []).map((c) => ({ ...c, id: uid('cap') }))
+  return clone
+}
+
+function duplicateRequest(flow, req) {
+  if (!flow) return
+  const clone = copyRequest(req)
+  clone.name = `${req.name} copy`
+  flow.requests.splice(flow.requests.indexOf(req) + 1, 0, clone)
+  S.pickedId = clone.id
+  commit()
+  toast('ok', `Duplicated ${req.name}`)
+}
+
+function duplicateFlow(col, flow) {
+  const clone = emptyFlow(`${flow.name} copy`, flow.requests.map(copyRequest))
+  col.flows.splice(col.flows.indexOf(flow) + 1, 0, clone)
+  commit()
+  toast('ok', `Duplicated ${flow.name}`)
+}
+
+function duplicateCollection(col) {
+  const clone = emptyCollection(
+    `${col.name} copy`,
+    col.flows.map((f) => emptyFlow(f.name, f.requests.map(copyRequest))),
+    col.source
+  )
+  S.collections.splice(S.collections.indexOf(col) + 1, 0, clone)
+  commit()
+  toast('ok', `Duplicated ${col.name}`)
+}
+
+/* --------------------------------------------------------- the popup menu */
+
+function openMenu(anchor, items) {
+  closeMenu()
+  const box = anchor.getBoundingClientRect()
+  const menu = el('div', { class: 'menu', role: 'menu' })
+
+  for (const item of items) {
+    if (item.sep) {
+      menu.append(el('div', { class: 'menu-sep' }))
+      continue
+    }
+    menu.append(
+      el('button', {
+        class: `menu-item${item.danger ? ' danger' : ''}`,
+        type: 'button',
+        role: 'menuitem',
+        disabled: item.disabled === true,
+        onclick: () => {
+          closeMenu()
+          item.run()
+        }
+      }, [
+        el('span', { class: 'menu-icon', html: ico(item.icon, 13, 1.8) }),
+        el('span', { class: 'menu-label', text: item.label }),
+        item.keys ? el('span', { class: 'menu-keys', text: item.keys }) : null
+      ])
+    )
+  }
+
+  document.body.append(menu)
+  // Placed after measuring, and flipped up or left when it would fall off.
+  const w = menu.offsetWidth
+  const h = menu.offsetHeight
+  const left = Math.min(box.left, window.innerWidth - w - 10)
+  const top = box.bottom + h + 10 > window.innerHeight ? box.top - h - 4 : box.bottom + 4
+  menu.style.left = `${Math.max(8, left)}px`
+  menu.style.top = `${Math.max(8, top)}px`
+
+  // Closing on any pointerdown removed the menu before the click could land
+  // on the item, so every entry did nothing at all. Only a press *outside*
+  // dismisses it.
+  setTimeout(() => {
+    window.addEventListener('pointerdown', menuAway, true)
+    window.addEventListener('keydown', menuKey)
+  }, 0)
+  menu.querySelector('.menu-item:not([disabled])')?.focus()
+}
+
+function menuAway(e) {
+  if (!e.target.closest?.('.menu')) closeMenu()
+}
+
+function menuKey(e) {
+  if (e.key === 'Escape') closeMenu()
+}
+
+function closeMenu() {
+  document.querySelector('.menu')?.remove()
+  window.removeEventListener('pointerdown', menuAway, true)
+  window.removeEventListener('keydown', menuKey)
 }
 
 const sourceTag = (s) => ({ postman: 'postman', 'rebind-workspace': 'rebind', 'rebind-suite': 'rebind' })[s] ?? s
@@ -332,9 +561,18 @@ function newCollection() {
  * and a surprise. None of it is undoable, so the dialog is the safety net.
  */
 function askDeleteRequest(req) {
-  confirmSheet({
-    title: `Delete “${req.name || 'this request'}”?`,
-    blurb: 'The request, its assertions and its captures go with it. Anything downstream that used a variable it captured will say the variable is missing.',
+  const goes = []
+  const n = (req.assertions ?? []).length
+  const c = (req.captures ?? []).filter((x) => x.name).length
+  if (n) goes.push(`${n} assertion${n === 1 ? '' : 's'}`)
+  if (c) goes.push(`${c} captured value${c === 1 ? '' : 's'}`)
+  if (S.results.has(req.id)) goes.push('its last result and any history')
+
+  askDelete({
+    kind: 'request',
+    subject: subjectCard(req),
+    goes,
+    breaks: dependants([req]),
     danger: 'Delete request',
     onYes: () => {
       const flow = flowOf(req.id)
@@ -343,16 +581,27 @@ function askDeleteRequest(req) {
       forget(req.id)
       if (S.pickedId === req.id) S.pickedId = allRequests()[0]?.id ?? ''
       commit()
-      toast('ok', 'Request deleted')
+      toast('ok', `Deleted ${req.name || 'the request'}`)
     }
   })
 }
 
 function askDeleteFlow(col, flow) {
   const n = flow.requests.length
-  confirmSheet({
-    title: `Delete the flow “${flow.name}”?`,
-    blurb: n ? `${n} request${n === 1 ? '' : 's'} inside it will be deleted too.` : 'It has no requests in it.',
+  const goes = n
+    ? [
+        `${n} request${n === 1 ? '' : 's'}: ${flow.requests
+          .slice(0, 4)
+          .map((r) => r.name)
+          .join(', ')}${n > 4 ? `, and ${n - 4} more` : ''}`
+      ]
+    : []
+
+  askDelete({
+    kind: 'flow',
+    subject: subjectGroup(I.flow, flow.name, `in ${col.name}`),
+    goes,
+    breaks: dependants(flow.requests),
     danger: n ? `Delete flow and ${n} request${n === 1 ? '' : 's'}` : 'Delete flow',
     onYes: () => {
       for (const r of flow.requests) forget(r.id)
@@ -365,13 +614,20 @@ function askDeleteFlow(col, flow) {
 }
 
 function askDeleteCollection(col) {
-  const n = col.flows.reduce((sum, f) => sum + f.requests.length, 0)
-  confirmSheet({
-    title: `Delete the collection “${col.name}”?`,
-    blurb: `${col.flows.length} flow${col.flows.length === 1 ? '' : 's'} and ${n} request${n === 1 ? '' : 's'} will be deleted. The file you imported it from is untouched.`,
+  const requests = col.flows.flatMap((f) => f.requests)
+  const goes = []
+  if (col.flows.length) goes.push(`${col.flows.length} flow${col.flows.length === 1 ? '' : 's'}: ${col.flows.map((f) => f.name).join(', ')}`)
+  if (requests.length) goes.push(`${requests.length} request${requests.length === 1 ? '' : 's'}`)
+  goes.push('The file you imported it from is untouched')
+
+  askDelete({
+    kind: 'collection',
+    subject: subjectGroup(I.folder, col.name, col.source && col.source !== 'canvas' ? `imported from ${sourceTag(col.source)}` : 'made here'),
+    goes,
+    breaks: dependants(requests),
     danger: 'Delete collection',
     onYes: () => {
-      for (const f of col.flows) for (const r of f.requests) forget(r.id)
+      for (const r of requests) forget(r.id)
       S.collections = S.collections.filter((c) => c.id !== col.id)
       if (!findRequest(S.pickedId)) S.pickedId = allRequests()[0]?.id ?? ''
       commit()
@@ -391,6 +647,9 @@ function forget(id) {
 }
 
 /* ================================================================= plane */
+
+/** Space is a modifier for panning, read by both the plane and each node. */
+let spaceHeld = false
 
 const NODE_W = 268
 const COL_GAP = 360
@@ -488,6 +747,7 @@ function nodeFor(req) {
     ])
   )
   node.append(el('span', { class: 'node-path', html: pathLabel(req.url) }))
+  node.append(specStrip(req))
 
   /* ports — what it needs on the left, what it gives on the right, on the
      same sides the beams arrive and leave from. */
@@ -521,12 +781,20 @@ function nodeFor(req) {
   const n = (req.assertions ?? []).length
   if (res) {
     foot.append(el('span', { class: `code ${tone(res.status)}`, text: res.error ? 'ERR' : String(res.status) }))
-    if (!res.error) foot.append(el('span', { text: `${res.timing?.total ?? 0}ms` }))
+    if (!res.error) {
+      foot.append(el('span', { text: `${res.timing?.total ?? 0}ms` }))
+      foot.append(el('span', { text: fmtBytes(res.bytes) }))
+    }
     if (n) {
       foot.append(
         el('span', { class: `checks ${res.failed ? 'fail' : 'pass'}`, text: res.failed ? `${res.failed}/${n} failed` : `${n} passed` })
       )
     }
+  } else if (req.recorded) {
+    // Never run here, but it was recorded doing something — which is a far
+    // more useful thing to show than "no assertions".
+    foot.append(el('span', { class: `code ${tone(req.recorded.status)} ghost`, text: String(req.recorded.status) }))
+    foot.append(el('span', { text: `${req.recorded.durationMs}ms when recorded` }))
   } else {
     foot.append(el('span', { text: n ? `${n} assertion${n === 1 ? '' : 's'}` : 'no assertions' }))
   }
@@ -561,6 +829,55 @@ function nodeFor(req) {
     }
   })
   return node
+}
+
+/**
+ * What the request is made of, at a glance.
+ *
+ * The name and the path say which endpoint. This says what will actually go
+ * out — how it authenticates, whether it carries a body, how many parameters
+ * and headers ride along — which is the difference between recognising a node
+ * and understanding it. Anything that is zero or none is left out rather than
+ * shown as an empty count; a row of noughts is noise.
+ */
+function specStrip(req) {
+  const strip = el('div', { class: 'spec' })
+  const chip = (kind, text, title) => strip.append(el('span', { class: `sc ${kind}`, title, text }))
+
+  const auth = req.auth?.kind ?? 'none'
+  if (auth !== 'none') chip('auth', AUTH_SHORT[auth] ?? auth, `Authenticates with ${auth}`)
+  else chip('open', 'no auth', 'Sends no credential')
+
+  if (req.bodyKind && req.bodyKind !== 'none') {
+    const size = (req.body ?? '').length
+    chip('body', req.bodyKind, `${req.bodyKind} body, ${size} characters`)
+  }
+
+  const q = (req.query ?? []).filter((r) => r.on !== false && r.key).length
+  const pp = (req.pathParams ?? []).filter((r) => r.on !== false && r.key).length
+  const h = (req.headers ?? []).filter((r) => r.on !== false && r.key).length
+  if (q) chip('n', `${q} query`, `${q} query parameter${q === 1 ? '' : 's'}`)
+  if (pp) chip('n', `${pp} path`, `${pp} path parameter${pp === 1 ? '' : 's'}`)
+  if (h) chip('n', `${h} header${h === 1 ? '' : 's'}`, `${h} header${h === 1 ? '' : 's'}`)
+
+  // The host only when it is a literal. When it comes from {{base_url}} the
+  // environment decides, and printing the variable twice helps nobody.
+  const host = literalHost(req.url)
+  if (host) chip('host', host, `Sent to ${host}`)
+
+  return strip
+}
+
+const AUTH_SHORT = { bearer: 'bearer', basic: 'basic', apiKey: 'api key', oauth2: 'oauth2', jwt: 'jwt', custom: 'custom' }
+
+function literalHost(url) {
+  const text = String(url ?? '')
+  if (!text || text.startsWith('{{')) return ''
+  try {
+    return new URL(text).host
+  } catch {
+    return ''
+  }
 }
 
 const markVars = (t) => esc(t).replace(/\{\{[\w.-]+\}\}/g, (m) => `<span class="node-var">${m}</span>`)
@@ -683,6 +1000,10 @@ function drawBeams() {
 /* ---------------------------------------------------- pan, zoom and drag */
 
 function drag(e, req, node) {
+  // A node's handler runs before the plane's, so anything that means "pan"
+  // has to be handed back rather than swallowed — otherwise space-drag and
+  // middle-drag do nothing at all when they start on top of a node.
+  if (spaceHeld || e.button === 1) return
   if (e.button !== 0 || e.target.closest('button')) return
   e.stopPropagation()
   const at = S.layout.get(req.id)
@@ -714,11 +1035,27 @@ function drag(e, req, node) {
   window.addEventListener('pointerup', up)
 }
 
+/**
+ * Panning and zooming.
+ *
+ * WHY SCROLL PANS AND DOES NOT ZOOM
+ *
+ * On a trackpad, a two-finger drag is how you move around a surface — it is
+ * the same gesture as scrolling a page, and every canvas tool people already
+ * use treats it that way. Binding it to zoom means the only way to pan is to
+ * find empty background and drag it, and on a plane covered in nodes there
+ * often is none. That reads as "I cannot pan".
+ *
+ * So: scroll pans. Zoom is ctrl or cmd with the wheel, which is also exactly
+ * what a trackpad pinch arrives as. And because a mouse has no second finger,
+ * the middle button and space both pan from anywhere — including from on top
+ * of a node, where a left-drag moves the node instead.
+ */
 function wirePlane() {
   const plane = $('plane')
 
-  plane.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.node') || e.target.closest('.plane-tools') || e.target.closest('.intake') || e.target.closest('.legend')) return
+  /** One pan gesture, wherever it started from. */
+  const beginPan = (e) => {
     const from = { x: e.clientX, y: e.clientY }
     const origin = { ...S.view }
     plane.classList.add('dragging')
@@ -734,24 +1071,74 @@ function wirePlane() {
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+  }
+
+  plane.addEventListener('pointerdown', (e) => {
+    // Middle button, or space held: pans from anywhere, over a node included.
+    if (e.button === 1 || (spaceHeld && e.button === 0)) {
+      e.preventDefault()
+      beginPan(e)
+      return
+    }
+    if (e.button !== 0) return
+    if (e.target.closest('.node') || e.target.closest('.plane-tools') || e.target.closest('.intake') || e.target.closest('.legend')) return
+    beginPan(e)
+  })
+
+  // Chromium scrolls on middle-click without this.
+  plane.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault()
   })
 
   plane.addEventListener(
     'wheel',
     (e) => {
       e.preventDefault()
-      const r = plane.getBoundingClientRect()
-      const px = e.clientX - r.left
-      const py = e.clientY - r.top
-      const next = clamp(S.view.z * (e.deltaY > 0 ? 0.92 : 1.08), 0.3, 2)
-      // Around the pointer, so whatever is under the cursor stays under it.
-      S.view.x = px - ((px - S.view.x) / S.view.z) * next
-      S.view.y = py - ((py - S.view.y) / S.view.z) * next
-      S.view.z = next
+
+      // A trackpad pinch arrives as a wheel event with ctrlKey set, and
+      // ctrl-wheel on a mouse means the same thing everywhere else.
+      if (e.ctrlKey || e.metaKey) {
+        const r = plane.getBoundingClientRect()
+        const px = e.clientX - r.left
+        const py = e.clientY - r.top
+        const next = clamp(S.view.z * (e.deltaY > 0 ? 0.93 : 1.07), 0.3, 2)
+        // Around the pointer, so whatever is under the cursor stays under it.
+        S.view.x = px - ((px - S.view.x) / S.view.z) * next
+        S.view.y = py - ((py - S.view.y) / S.view.z) * next
+        S.view.z = next
+        applyView()
+        return
+      }
+
+      // Otherwise it is a scroll, and a scroll moves the plane. Shift swaps
+      // the axis for a wheel that only has one.
+      const [dx, dy] = e.shiftKey && !e.deltaX ? [e.deltaY, 0] : [e.deltaX, e.deltaY]
+      S.view.x -= dx
+      S.view.y -= dy
       applyView()
     },
     { passive: false }
   )
+
+  // Space is a modifier here, not a button press, so it must not scroll the
+  // page or activate whatever happens to be focused.
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !spaceHeld && !isTyping(e.target) && !sheetUp) {
+      spaceHeld = true
+      plane.classList.add('ready')
+      e.preventDefault()
+    }
+  })
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') {
+      spaceHeld = false
+      plane.classList.remove('ready')
+    }
+  })
+  window.addEventListener('blur', () => {
+    spaceHeld = false
+    plane.classList.remove('ready')
+  })
 
   $('zoomIn').onclick = () => {
     S.view.z = clamp(S.view.z * 1.15, 0.3, 2)
@@ -763,6 +1150,12 @@ function wirePlane() {
   }
   $('zoomFit').onclick = fit
   $('tidyBtn').onclick = tidy
+}
+
+/** True while the caret is in something the user is writing into. */
+function isTyping(node) {
+  const tag = node?.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node?.isContentEditable === true
 }
 
 function applyView() {
@@ -857,12 +1250,18 @@ function paintBench() {
     et.append(
       el('button', { class: `tab${S.editTab === id ? ' on' : ''}`, type: 'button', role: 'tab', html: `${label}${n ? `<b>${n}</b>` : ''}`, onclick: () => {
         S.editTab = id
+        // Picking a tab on a folded half opens it. The alternative is a click
+        // that changes something you cannot see.
+        if (S.pane === 'response') S.pane = 'split'
         paintBench()
       } })
     )
   }
   $('editBody').replaceChildren(editPanel(req, res))
 
+  // Both halves put their tabs on their own row. Squeezing the request's six
+  // into its bar left "Chain" outside the visible width, reachable only by
+  // scrolling a row with no scrollbar — a tab nobody would ever find.
   const rt = $('respTabs')
   rt.replaceChildren()
   for (const [id, label] of RESP_TABS) {
@@ -879,7 +1278,85 @@ function paintBench() {
     )
   }
   $('respBody').replaceChildren(respPanel(req, res))
-  $('benchSplit').style.gridTemplateRows = `minmax(120px, ${S.split}fr) 7px minmax(110px, ${100 - S.split}fr)`
+  paintRespStats(res)
+  $('copyBody').disabled = !res || res.error
+  layoutPanes()
+}
+
+/**
+ * The line along the top of the response half.
+ *
+ * Present before anything is sent, saying so. A panel that appears only after
+ * the first send is a panel people do not know is there — which is exactly the
+ * complaint that produced it.
+ */
+/**
+ * How the two halves share the panel.
+ *
+ * Three states rather than a free-form split, because the two useful shapes
+ * are "both" and "all of one": editing twenty headers and reading a large
+ * payload want opposite things, and dragging a handle to the top every time is
+ * a chore. Filling one half folds the other to its bar, which stays visible —
+ * a collapsed pane you cannot see is a pane you cannot get back.
+ */
+function layoutPanes() {
+  const host = $('benchSplit')
+  const BAR = '30px'
+  // The handle's row collapses to nothing when there is nothing to drag
+  // between, rather than leaving a seven-pixel gap under a folded bar.
+  if (S.pane === 'request') host.style.gridTemplateRows = `minmax(120px, 1fr) 0px ${BAR}`
+  else if (S.pane === 'response') host.style.gridTemplateRows = `${BAR} 0px minmax(120px, 1fr)`
+  else host.style.gridTemplateRows = `minmax(90px, ${S.split}fr) 7px minmax(90px, ${100 - S.split}fr)`
+
+  $('reqPane').classList.toggle('folded', S.pane === 'response')
+  $('resPane').classList.toggle('folded', S.pane === 'request')
+  $('benchGrip').hidden = S.pane !== 'split'
+
+  for (const [id, filled] of [['reqGrow', S.pane === 'request'], ['resGrow', S.pane === 'response']]) {
+    const btn = $(id)
+    btn.classList.toggle('on', filled)
+    btn.title = filled ? 'Back to both' : 'Fill the panel'
+  }
+  $('reqFold').setAttribute('aria-expanded', String(S.pane !== 'response'))
+  $('resFold').setAttribute('aria-expanded', String(S.pane !== 'request'))
+}
+
+/** Fill with one half, or go back to both. */
+function fillPane(which) {
+  S.pane = S.pane === which ? 'split' : which
+  layoutPanes()
+}
+
+/** Fold one half away, which is the same as filling with the other. */
+function foldPane(which) {
+  const other = which === 'request' ? 'response' : 'request'
+  S.pane = S.pane === other ? 'split' : other
+  layoutPanes()
+}
+
+function paintRespStats(res) {
+  const host = $('respStats')
+  host.replaceChildren()
+
+  if (!res) {
+    host.append(el('span', { class: 'stat-none', text: 'not sent yet' }))
+    return
+  }
+  if (res.error) {
+    host.append(el('span', { class: 'code bad', text: 'no response' }))
+    return
+  }
+  host.append(el('span', { class: `code ${tone(res.status)}`, text: `${res.status} ${word(res.status)}` }))
+  host.append(el('span', { class: 'stat', text: `${res.timing?.total ?? 0} ms` }))
+  host.append(el('span', { class: 'stat', text: fmtBytes(res.bytes) }))
+  if (res.checks.length) {
+    host.append(
+      el('span', {
+        class: `stat ${res.failed ? 'fail' : 'pass'}`,
+        text: res.failed ? `${res.failed} of ${res.checks.length} failed` : `${res.checks.length} passed`
+      })
+    )
+  }
 }
 
 function paintPreview(req) {
@@ -1658,59 +2135,120 @@ function convert(req) {
 
 /* ================================================================= export */
 
-function openExport() {
-  const req = current()
-  const flow = req ? flowOf(req.id) : allFlows()[0]
+/**
+ * The export centre.
+ *
+ * A page rather than a dialog, because choosing a target means reading the
+ * code it produces — and reading is what the old cramped preview made hard.
+ * The scope switch is explicit: exporting one request and exporting the flow
+ * it sits in are different acts and used to be inferred from what happened to
+ * be selected.
+ */
+let exportTarget = 'curl'
+
+function openExport(onlyFlow, onlyRequest) {
+  const req = onlyRequest !== undefined ? onlyRequest : current()
+  const flow = onlyFlow ?? (req ? flowOf(req.id) : allFlows()[0])
   if (!req && !flow) {
     toast('bad', 'There is nothing to export yet.')
     return
   }
-  let target = 'curl'
-  const list = el('div', { class: 'exp-list' })
-  const out = el('pre')
-  const fname = el('span')
+  let scope = req ? 'request' : 'flow'
+
+  const veil = $('veil')
+  veil.replaceChildren()
+  veil.hidden = false
+  sheetUp = true
+  onSheetClose = null
+
+  const shell = el('div', { class: 'page export-page' })
 
   const paint = () => {
-    list.replaceChildren()
+    const whole = WHOLE_FLOW.has(exportTarget) || scope === 'flow'
+    const subject = whole ? flow : req
+    const code = generate(exportTarget, {
+      request: scope === 'request' ? req : null,
+      flow,
+      environment: environment()
+    })
+    const spec = TARGETS.find((t) => t.id === exportTarget)
+    const name = `${slug(whole ? (flow?.name ?? 'flow') : (req?.name ?? 'request'))}.${spec.ext}`
+
+    /* left: the targets, grouped */
+    const nav = el('nav', { class: 'page-nav' }, [el('h3', { text: 'Export' })])
+    if (req && flow) {
+      nav.append(
+        el('div', { class: 'seg export-scope' }, [
+          el('button', { class: `segbtn${scope === 'request' ? ' on' : ''}`, type: 'button', text: 'This request', onclick: () => {
+            scope = 'request'
+            paint()
+          } }),
+          el('button', { class: `segbtn${scope === 'flow' ? ' on' : ''}`, type: 'button', text: 'Whole flow', onclick: () => {
+            scope = 'flow'
+            paint()
+          } })
+        ])
+      )
+    }
     for (const group of GROUPS) {
       const items = TARGETS.filter((t) => t.group === group)
       if (!items.length) continue
-      const box = el('div', {}, [el('h4', { text: group })])
+      nav.append(el('h4', { class: 'nav-group', text: group }))
       for (const t of items) {
-        box.append(
-          el('button', { class: `exp-opt${t.id === target ? ' on' : ''}`, type: 'button', onclick: () => {
-            target = t.id
+        nav.append(
+          el('button', { class: t.id === exportTarget ? 'on' : '', type: 'button', onclick: () => {
+            exportTarget = t.id
             paint()
-          } }, [el('span', { class: 'exp-ext', text: `.${t.ext.split('.').pop()}` }), el('span', { text: t.label })])
+          } }, [
+            el('span', { class: 'exp-ext', text: `.${t.ext.split('.').pop()}` }),
+            el('span', { class: 'menu-label', text: t.label })
+          ])
         )
       }
-      list.append(box)
     }
-    out.textContent = generate(target, { request: req, flow, environment: environment() })
-    const t = TARGETS.find((x) => x.id === target)
-    fname.textContent = `${slug(WHOLE_FLOW.has(target) ? flow?.name ?? 'flow' : req?.name ?? 'request')}.${t.ext}`
-  }
-  paint()
+    nav.append(el('span', { class: 'spacer' }))
+    nav.append(el('footer', { html: 'Variables stay variables.<br />No credential is ever resolved into a file.' }))
 
-  sheet({
-    title: 'Export',
-    blurb: 'The preview is exactly what gets written. Variables stay variables — no credential is ever resolved into an exported file.',
-    body: el('div', { class: 'exp' }, [list, el('div', { class: 'exp-out' }, [el('div', { class: 'exp-out-top' }, [fname, el('span', { class: 'spacer' })]), out])]),
-    acts: [
-      { label: 'Copy', onClick: () => {
-        navigator.clipboard.writeText(out.textContent)
-        toast('ok', 'Copied')
-      } },
-      { label: 'Save file', go: true, onClick: async () => {
-        const path = await window.prism.file.save({
-          name: fname.textContent,
-          text: out.textContent,
-          filters: [{ name: 'File', extensions: [fname.textContent.split('.').pop()] }]
+    /* right: the file */
+    const lines = code.split('\n').length
+    const main = el('div', { class: 'page-main' }, [
+      el('div', { class: 'page-head' }, [
+        el('h2', { text: spec.label }),
+        el('p', {
+          text: whole
+            ? `Every request in ${flow?.name ?? 'the flow'} — ${flow?.requests.length ?? 0} of them.`
+            : `${req?.method} ${shortPath(req?.url ?? '')}`
         })
-        if (path) toast('ok', `Written to ${path}`)
-      } }
-    ]
-  })
+      ]),
+      el('div', { class: 'file-bar' }, [
+        el('span', { class: 'file-name', text: name }),
+        el('span', { class: 'pane-gap' }),
+        el('span', { class: 'stat', text: `${lines} line${lines === 1 ? '' : 's'}` }),
+        el('button', { class: 'btn', type: 'button', text: 'Copy', onclick: () => {
+          navigator.clipboard.writeText(code)
+          toast('ok', 'Copied')
+        } }),
+        el('button', { class: 'btn go', type: 'button', text: 'Save file', onclick: async () => {
+          const path = await window.prism.file.save({
+            name,
+            text: code,
+            filters: [{ name: 'File', extensions: [name.split('.').pop()] }]
+          })
+          if (path) toast('ok', `Written to ${path}`)
+        } })
+      ]),
+      el('div', { class: 'page-body file-body' }, [source(code)])
+    ])
+
+    shell.replaceChildren(nav, main)
+    shell.append(el('button', { class: 'page-close', type: 'button', 'aria-label': 'Close', html: ico(I.x, 14, 2.2), onclick: closeSheet }))
+  }
+
+  paint()
+  veil.append(shell)
+  veil.onpointerdown = (e) => {
+    if (e.target === veil) closeSheet()
+  }
 }
 
 /* =========================================================== environments */
@@ -1733,7 +2271,7 @@ function openEnvironments() {
             el('span', { class: 'grow', text: env.name }),
             el('span', { class: 'count', text: String(Object.keys(env.values ?? {}).length) })
           ]),
-          el('button', { class: 'rowbtn del', style: 'opacity:1', type: 'button', 'aria-label': `Delete ${env.name}`, html: ico(I.bin, 12, 1.9), onclick: () => {
+          el('button', { class: 'mini-btn danger', type: 'button', 'aria-label': `Delete ${env.name}`, html: ico(I.bin, 12, 1.9), onclick: () => {
             S.environments = S.environments.filter((e) => e.id !== env.id)
             if (S.envId === env.id) S.envId = S.environments[0]?.id ?? ''
             currentId = S.envId
@@ -1824,156 +2362,596 @@ function openEnvironments() {
   })
 }
 
+/* ============================================================ page shell */
+
+/**
+ * The shell Settings and Help share.
+ *
+ * A nav rail and a scrolling column, at a size where a paragraph is a
+ * paragraph. Both are things people read rather than dismiss, and a dialog the
+ * size of a confirm is the wrong container for either.
+ */
+function page({ title, sections, active, onPick }) {
+  const veil = $('veil')
+  veil.replaceChildren()
+  veil.hidden = false
+  sheetUp = true
+  onSheetClose = null
+
+  const nav = el('nav', { class: 'page-nav' }, [el('h3', { text: title })])
+  for (const sec of sections) {
+    nav.append(
+      el('button', {
+        class: sec.id === active ? 'on' : '',
+        type: 'button',
+        html: `${ico(sec.icon, 13, 1.9)}<span>${esc(sec.label)}</span>`,
+        onclick: () => onPick(sec.id)
+      })
+    )
+  }
+  nav.append(el('span', { class: 'spacer' }))
+  nav.append(el('footer', { html: 'Rebind Prism 0.1.0<br />MIT licensed &middot; no account, no key' }))
+
+  const sec = sections.find((x) => x.id === active) ?? sections[0]
+  const main = el('div', { class: 'page-main' }, [
+    el('div', { class: 'page-head' }, [el('h2', { text: sec.label }), sec.blurb ? el('p', { text: sec.blurb }) : null]),
+    el('div', { class: 'page-body' }, [sec.render()])
+  ])
+
+  const shell = el('div', { class: 'page' }, [nav, main])
+  shell.append(
+    el('button', { class: 'page-close', type: 'button', 'aria-label': 'Close', html: ico(I.x, 14, 2.2), onclick: closeSheet })
+  )
+  veil.append(shell)
+  veil.onpointerdown = (e) => {
+    if (e.target === veil) closeSheet()
+  }
+}
+
 /* =============================================================== settings */
 
-function openSettings() {
-  const body = el('div', { class: 'prefs' })
+let settingsAt = 'Appearance'
 
-  const paint = () => {
-    body.replaceChildren()
-    for (const group of SET_GROUPS) {
-      const items = SETTINGS.filter((x) => x.group === group)
-      if (!items.length) continue
-      const box = el('section', { class: 'prefgroup' }, [el('h4', { text: group })])
+const SET_BLURB = {
+  Appearance: 'How Prism looks, and how much each node tells you at a glance.',
+  Sending: 'What happens when a request actually goes out.',
+  Safety: 'Guards that are on by default. Turning one off says what it costs.',
+  Data: 'What Prism holds while it is open.',
+  About: 'What this is, and what it will not do.'
+}
 
-      for (const item of items) {
-        const control = el('div', { class: 'prefctl' })
-        const value = S.prefs[item.id]
+const SET_ICON = {
+  Appearance: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2"/>',
+  Sending: '<path d="M7 4v16l13-8z"/>',
+  Safety: '<path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6z"/>',
+  Data: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/>',
+  About: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'
+}
 
-        if (item.kind === 'choice') {
-          const seg = el('div', { class: 'seg' })
-          for (const opt of item.options) {
-            seg.append(
-              el('button', { class: `segbtn${value === opt.id ? ' on' : ''}`, type: 'button', text: opt.label, onclick: () => {
-                setPref(item.id, opt.id)
-                if (item.id === 'theme') applyTheme()
-                paint()
-              } })
-            )
-          }
-          control.append(seg)
-        } else if (item.kind === 'toggle') {
-          control.append(
-            el('button', {
-              class: `switch${value ? ' on' : ''}${item.danger && !value ? ' warn' : ''}`,
-              type: 'button',
-              role: 'switch',
-              'aria-checked': String(Boolean(value)),
-              'aria-label': item.label,
-              onclick: () => {
-                setPref(item.id, !value)
-                paint()
-                commit()
-              }
-            }, [el('i')])
-          )
-        } else {
-          control.append(
-            el('input', {
-              class: 'prefnum',
-              type: 'number',
-              value: String(value),
-              min: String(item.min ?? 0),
-              max: String(item.max ?? 999999),
-              'aria-label': item.label,
-              onchange: (e) => {
-                const n = Math.min(item.max ?? Infinity, Math.max(item.min ?? 0, Number(e.target.value) || item.value))
-                setPref(item.id, n)
-                paint()
-              }
-            })
-          )
-          if (item.unit) control.append(el('span', { class: 'prefunit', text: item.unit }))
-        }
+function openSettings(section) {
+  if (section) settingsAt = section
+  const sections = [...SET_GROUPS, 'About'].map((g) => ({
+    id: g,
+    label: g,
+    icon: SET_ICON[g],
+    blurb: SET_BLURB[g],
+    render: () => (g === 'About' ? aboutPanel() : settingsGroup(g))
+  }))
+  page({ title: 'Settings', sections, active: settingsAt, onPick: (id) => openSettings(id) })
+}
 
-        box.append(
-          el('div', { class: `prefrow${item.danger && value === false ? ' alert' : ''}` }, [
-            el('div', { class: 'prefwords' }, [
-              el('b', { text: item.label }),
-              el('p', { text: item.help }),
-              // Named so the claim that a setting does something is checkable
-              // rather than something you have to take on trust.
-              el('code', { text: item.wiredIn })
-            ]),
-            control
-          ])
-        )
-      }
-      body.append(box)
-    }
+function settingsGroup(group) {
+  const box = el('div')
+  for (const item of SETTINGS.filter((x) => x.group === group)) box.append(settingRow(item, group))
 
-    body.append(
-      el('section', { class: 'prefgroup' }, [
-        el('h4', { text: 'This session' }),
-        el('div', { class: 'prefrow' }, [
-          el('div', { class: 'prefwords' }, [
-            el('b', { text: 'Run history' }),
-            el('p', { text: `${S.history.length} run${S.history.length === 1 ? '' : 's'} held in memory. Nothing is written to disk.` })
-          ]),
-          el('button', { class: 'btn', type: 'button', text: 'Clear', onclick: () => {
+  if (group === 'Data') {
+    box.append(
+      el('div', { class: 'prefrow' }, [
+        el('div', { class: 'prefwords' }, [
+          el('b', { text: 'Run history' }),
+          el('p', {
+            text: `${S.history.length} run${S.history.length === 1 ? '' : 's'} held in memory. Nothing is written to disk.`
+          })
+        ]),
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Clear',
+          onclick: () => {
             S.history = []
             S.results.clear()
             S.previous.clear()
-            paint()
             commit()
+            openSettings(group)
             toast('ok', 'History cleared')
-          } })
+          }
+        })
+      ])
+    )
+    box.append(
+      el('div', { class: 'prefrow' }, [
+        el('div', { class: 'prefwords' }, [
+          el('b', { text: 'Preferences' }),
+          el('p', { text: 'Put every setting back to its default.' })
         ]),
-        el('div', { class: 'prefrow' }, [
-          el('div', { class: 'prefwords' }, [
-            el('b', { text: 'Preferences' }),
-            el('p', { text: 'Put every setting on this page back to its default.' })
-          ]),
-          el('button', { class: 'btn', type: 'button', text: 'Reset', onclick: () => {
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Reset',
+          onclick: () => {
             for (const item of SETTINGS) S.prefs[item.id] = item.value
             saveSettings(safeStorage(), S.prefs)
             applyTheme()
-            paint()
             commit()
+            openSettings(group)
             toast('ok', 'Settings reset')
-          } })
-        ])
+          }
+        })
       ])
     )
   }
-  paint()
+  return box
+}
 
-  sheet({
-    title: 'Settings',
-    blurb: 'Every switch here changes what Prism does, and each one names the function that reads it. Preferences are remembered; collections and environments are not.',
-    body,
-    acts: []
+function settingRow(item, group) {
+  const value = S.prefs[item.id]
+  const control = el('div', { class: 'prefctl' })
+
+  if (item.kind === 'choice') {
+    const seg = el('div', { class: 'seg' })
+    for (const opt of item.options) {
+      seg.append(
+        el('button', {
+          class: `segbtn${value === opt.id ? ' on' : ''}`,
+          type: 'button',
+          text: opt.label,
+          onclick: () => {
+            setPref(item.id, opt.id)
+            if (item.id === 'theme') applyTheme()
+            openSettings(group)
+          }
+        })
+      )
+    }
+    control.append(seg)
+  } else if (item.kind === 'toggle') {
+    control.append(
+      el(
+        'button',
+        {
+          class: `switch${value ? ' on' : ''}${item.danger && !value ? ' warn' : ''}`,
+          type: 'button',
+          role: 'switch',
+          'aria-checked': String(Boolean(value)),
+          'aria-label': item.label,
+          onclick: () => {
+            setPref(item.id, !value)
+            commit()
+            openSettings(group)
+          }
+        },
+        [el('i')]
+      )
+    )
+  } else {
+    control.append(
+      el('input', {
+        class: 'prefnum',
+        type: 'number',
+        value: String(value),
+        min: String(item.min ?? 0),
+        max: String(item.max ?? 999999),
+        'aria-label': item.label,
+        onchange: (e) => {
+          setPref(item.id, Math.min(item.max ?? Infinity, Math.max(item.min ?? 0, Number(e.target.value) || item.value)))
+          openSettings(group)
+        }
+      })
+    )
+    if (item.unit) control.append(el('span', { class: 'prefunit', text: item.unit }))
+  }
+
+  return el('div', { class: `prefrow${item.danger && value === false ? ' alert' : ''}` }, [
+    el('div', { class: 'prefwords' }, [
+      el('b', { text: item.label }),
+      el('p', { text: item.help }),
+      // Named so the claim that a setting does something is checkable rather
+      // than something the reader has to take on trust.
+      el('code', { text: item.wiredIn })
+    ]),
+    control
+  ])
+}
+
+function aboutPanel() {
+  return el('div', { class: 'doc' }, [
+    el('p', {
+      html:
+        '<strong>Rebind Prism</strong> is an open-source desktop workspace for testing an API as a <em>sequence</em> rather than one request at a time. It opens Rebind recordings and Postman collections and takes it from there.'
+    }),
+    el('h4', { text: 'What it will not do' }),
+    el('ul', {}, [
+      el('li', {
+        html: 'Put a credential in an export. A <code>{{token}}</code> comes out as an environment-variable lookup, in all fifteen targets.'
+      }),
+      el('li', {
+        html: 'Write to disk on its own. Collections, environments and history live in memory; only the settings on this page are remembered.'
+      }),
+      el('li', { html: 'Record browser traffic — it has no browser. Recordings arrive from Rebind as a file.' }),
+      el('li', { html: 'Run a Postman pre-request script. Those are read as text, never executed.' })
+    ]),
+    el('h4', { text: 'Licence' }),
+    el('p', {
+      html: 'MIT. No account, no licence key, no gated features — everything it does, it does for everyone.'
+    })
+  ])
+}
+
+/* =================================================================== help */
+
+let helpAt = 'start'
+
+const HELP = [
+  {
+    id: 'start',
+    label: 'Getting started',
+    icon: '<path d="M12 3 21 19H3Z"/>',
+    blurb: 'The shortest path from a file to a passing test.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('h4', { text: 'Bring something in' }),
+        el('p', {
+          html: '<strong>Import</strong> in the bar reads four kinds of file: a Rebind workspace export, a Rebind flow, a Postman collection (v2.0 or v2.1) and a Postman environment. Everything arrives as a <strong>collection</strong>.'
+        }),
+        el('p', {
+          html: 'To get a recording out of Rebind, use <strong>Export workspace</strong> on its API page. Every other export it offers writes a suite, which throws away the captured traffic — and that traffic is the part no other tool can reproduce.'
+        }),
+        el('h4', { text: 'Turn a recording into tests' }),
+        el('p', {
+          html: 'Recorded calls arrive in the panel at the top right of the plane. Click one to turn it into a test: Prism proposes assertions from what the call actually did — its status, its content type, a field that was present, and a time budget.'
+        }),
+        el('div', {
+          class: 'callout',
+          html: 'The budget is deliberately generous. One set to the first run&rsquo;s exact number fails on the second run, and a test that cries wolf gets deleted.'
+        }),
+        el('h4', { text: 'Send it' }),
+        el('p', {
+          html: 'Pick a node, then <strong>Send</strong> in the workbench — or the play button on the node. <strong>Run flow</strong> sends every request in the flow in order, so a value captured by one is available to the next.'
+        })
+      ])
+  },
+  {
+    id: 'structure',
+    label: 'Collections & flows',
+    icon: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    blurb: 'Three levels, because that is what the files actually are.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('p', {
+          html: 'A <strong>collection</strong> holds <strong>flows</strong>, and a flow holds <strong>requests</strong>. A Postman folder becomes a flow; the collection keeps its own identity, so you can tell where a request came from and re-export it as the shape you opened.'
+        }),
+        el('h4', { text: 'Adding and deleting' }),
+        el('ul', {}, [
+          el('li', { html: 'The <strong>+</strong> beside &ldquo;Collections&rdquo; makes a new one.' }),
+          el('li', { html: 'The <strong>+</strong> on a collection row adds a flow; on a flow row it adds a request.' }),
+          el('li', {
+            html: 'The bin on any row deletes it, after a dialog that says what goes with it — deleting a flow takes its requests.'
+          })
+        ]),
+        el('div', {
+          class: 'callout warn',
+          html: 'None of it is undoable, and Prism holds your work in memory only. Export anything you want to keep.'
+        })
+      ])
+  },
+  {
+    id: 'plane',
+    label: 'The plane',
+    icon: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H14a4 4 0 0 1 4 4v5.5"/>',
+    blurb: 'How to read a node, and what the beams mean.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('p', {
+          html: 'A node is a <strong>label, not an editor</strong>. Everything changeable is in the workbench on the right; the node carries what you need to read the graph, which is why it stays one size and stays legible zoomed out.'
+        }),
+        el('h4', { text: 'What is on a node' }),
+        el('ul', {}, [
+          el('li', { html: 'The <strong>method</strong>, as a colour down the left edge and a label.' }),
+          el('li', {
+            html: 'The <strong>endpoint</strong>, with a <code>{{base_url}}</code> prefix dimmed so the path reads first.'
+          }),
+          el('li', {
+            html: 'A <strong>spec strip</strong>: how it authenticates, whether it carries a body and of what kind, how many query, path and header rows ride along, and the host when that is a literal.'
+          }),
+          el('li', { html: '<strong>Needs</strong> down the left and <strong>gives</strong> down the right.' }),
+          el('li', {
+            html: 'The <strong>last result</strong> — status, time, size, assertions — or what it did when it was recorded, if it has not been run here yet.'
+          })
+        ]),
+        el('h4', { text: 'Ports and beams' }),
+        el('p', {}, [
+          el('span', { class: 'swatch', html: '<i style="border:1.5px solid var(--cyan)"></i>needs a variable' }),
+          el('span', { class: 'swatch', html: '<i style="background:var(--magenta)"></i>gives a variable' })
+        ]),
+        el('p', {
+          html: 'A need turns <strong>red</strong> when nothing provides it — no request captures it and no environment sets it. That is the most common reason a chain fails, and it is visible before you send anything.'
+        }),
+        el('p', {
+          html: 'A <strong>beam</strong> is drawn wherever one request captures a value another uses. Beams are derived, never stored: you make the connection by capturing a value and spending it, which is the same act as making the test work.'
+        }),
+        el('h4', { text: 'Moving around' }),
+        el('dl', { class: 'keys' }, [
+          el('dt', { text: 'scroll' }),
+          el('dd', { text: 'Pan. A two-finger drag on a trackpad does the same.' }),
+          el('dt', { text: 'Ctrl scroll' }),
+          el('dd', { text: 'Zoom around the pointer. A trackpad pinch is the same gesture.' }),
+          el('dt', { text: 'drag background' }),
+          el('dd', { text: 'Pan.' }),
+          el('dt', { text: 'Space drag' }),
+          el('dd', { text: 'Pan from anywhere, over a node included.' }),
+          el('dt', { text: 'middle drag' }),
+          el('dd', { text: 'The same, for a mouse with a wheel button.' }),
+          el('dt', { text: 'drag a node' }),
+          el('dd', { text: 'Move it. It then stays where you put it.' })
+        ]),
+        el('p', {
+          html: '<strong>Fit</strong> frames everything; <strong>Tidy</strong> lays the nodes back out in order and forgets any you moved.'
+        })
+      ])
+  },
+  {
+    id: 'chain',
+    label: 'Chaining',
+    icon: '<path d="M9 15 15 9"/><path d="M11 6.5 13 4.5a4 4 0 0 1 6 6l-2 2"/><path d="M13 17.5 11 19.5a4 4 0 0 1-6-6l2-2"/>',
+    blurb: 'Carrying a value from one request to the next.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('p', {
+          html: 'On the <strong>Chain</strong> tab, give a value a name and say where to find it — a JSON path in the body, or a header. When the request runs, that value lands in the current environment under the name.'
+        }),
+        el('p', {
+          html: 'Any later request that writes <code>{{that_name}}</code> — in its URL, a parameter, a header, the body or the auth block — picks it up. Nobody copies anything.'
+        }),
+        el('h4', { text: 'Paths' }),
+        el('p', {
+          html: '<code>data.token</code>, <code>data.items[0].id</code> and <code>data.items.0.id</code> all work. A path that is not there yields nothing rather than an error.'
+        }),
+        el('div', {
+          class: 'callout',
+          html: 'Chained values are written into the environment, so they appear on the Environments page and last until you switch environment or close Prism.'
+        })
+      ])
+  },
+  {
+    id: 'tests',
+    label: 'Assertions',
+    icon: '<path d="M4 12.5 9 17.5 20 6.5"/>',
+    blurb: 'Every subject, and the operators it takes.',
+    body: () => {
+      const doc = el('div', { class: 'doc' })
+      doc.append(
+        el('p', {
+          html: 'An assertion is a <strong>subject</strong> and an <strong>operator</strong>, so either half can change without picking a different assertion from a list. Every result says what it actually saw — a red row that will not tell you what it found is a row people delete.'
+        })
+      )
+      for (const subject of SUBJECTS) {
+        const ops = (OPERATORS[subject.id] ?? []).map((o) => OP_LABEL[o] ?? o).join(', ')
+        doc.append(el('h4', { text: subject.label }))
+        doc.append(el('p', { html: `<code>${esc(ops)}</code>` }))
+      }
+      doc.append(
+        el('div', {
+          class: 'callout',
+          html: 'Comparisons are loose where it helps: <code>"200"</code> typed into a text box matches the number <code>200</code>.'
+        })
+      )
+      return doc
+    }
+  },
+  {
+    id: 'export',
+    label: 'Export',
+    icon: '<path d="M12 14V3"/><path d="m7.5 7.5 4.5-4.5 4.5 4.5"/><path d="M4 20h16"/>',
+    blurb: 'Fifteen targets, and the one rule about credentials.',
+    body: () => {
+      const doc = el('div', { class: 'doc' })
+      doc.append(
+        el('div', {
+          class: 'callout',
+          html: '<strong>No credential is ever resolved into an export.</strong> A <code>{{token}}</code> comes out as a read of an environment variable, in every target. Exported files get committed, pasted into tickets and shown on screen shares.'
+        })
+      )
+      for (const group of GROUPS) {
+        const items = TARGETS.filter((t) => t.group === group)
+        if (!items.length) continue
+        doc.append(el('h4', { text: group }))
+        doc.append(el('ul', {}, items.map((t) => el('li', { html: `${esc(t.label)} &mdash; <code>.${esc(t.ext)}</code>` }))))
+      }
+      doc.append(
+        el('p', {
+          html: 'The Postman export declares variable <em>names</em> with empty values for the same reason: writing a live token into a collection file is exactly the leak the rule exists to prevent.'
+        })
+      )
+      return doc
+    }
+  },
+  {
+    id: 'keys',
+    label: 'Shortcuts',
+    icon: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+    blurb: 'Everything reachable without the mouse.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('dl', { class: 'keys' }, [
+          el('dt', { text: 'Ctrl K' }),
+          el('dd', { text: 'Find a request, or run a command' }),
+          el('dt', { text: 'Ctrl Enter' }),
+          el('dd', { text: 'Send the request in the workbench' }),
+          el('dt', { text: 'Enter' }),
+          el('dd', { text: 'From the endpoint field, send' }),
+          el('dt', { text: 'F1' }),
+          el('dd', { text: 'Open this help' }),
+          el('dt', { text: 'Escape' }),
+          el('dd', { text: 'Close whatever is open' }),
+          el('dt', { text: 'Up / Down' }),
+          el('dd', { text: 'On the split handle, resize the workbench' })
+        ]),
+        el('p', {
+          html: 'The palette also reaches Settings, Help, Environments, History, Import, Export, Run flow and Tidy — anything in the bar has an entry there.'
+        })
+      ])
+  },
+  {
+    id: 'privacy',
+    label: 'Privacy',
+    icon: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+    blurb: 'Where your data goes, which is nowhere.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('h4', { text: 'What leaves this machine' }),
+        el('p', {
+          html: 'Only the requests you send, to the hosts you aim them at. Prism has no telemetry, no account, no update check and no network use of its own.'
+        }),
+        el('h4', { text: 'What is stored' }),
+        el('ul', {}, [
+          el('li', { html: 'The settings on the Settings page, in the app&rsquo;s own local storage.' }),
+          el('li', {
+            html: 'Everything else — collections, environments, results, history — in memory only, gone when Prism closes.'
+          })
+        ]),
+        el('h4', { text: 'Credentials' }),
+        el('ul', {}, [
+          el('li', { html: 'Never resolved into an export, in any target.' }),
+          el('li', {
+            html: 'Masked in the inspector&rsquo;s request headers, unless you turn that off in Settings &rarr; Safety.'
+          }),
+          el('li', {
+            html: 'A variable marked <strong>secret</strong> on the Environments page is hidden in its field and left out of exports.'
+          })
+        ]),
+        el('div', {
+          class: 'callout warn',
+          html: 'Response bodies are shown exactly as they arrive. If an API returns a token, Prism displays it — and Insights points that out.'
+        })
+      ])
+  }
+]
+
+function openHelp(section) {
+  if (section) helpAt = section
+  page({
+    title: 'Help',
+    sections: HELP.map((h) => ({ ...h, render: h.body })),
+    active: helpAt,
+    onPick: (id) => openHelp(id)
   })
 }
 
 /* ================================================================ history */
 
+/**
+ * History.
+ *
+ * Grouped by request rather than laid out as one long list of times. What
+ * people come here for is "did this get slower" or "when did this start
+ * failing", and both are questions about one endpoint over several runs — a
+ * flat reverse-chronological list buries that under everything else that ran
+ * in between.
+ */
+let historyOf = ''
+
 function openHistory() {
-  const body = el('div')
-  if (!S.history.length) body.append(el('p', { class: 'note', text: 'No runs yet in this session.' }))
+  const byRequest = new Map()
   for (const h of S.history) {
-    body.append(
-      el('button', { class: 'snap', type: 'button', onclick: () => {
+    if (!byRequest.has(h.requestId)) byRequest.set(h.requestId, [])
+    byRequest.get(h.requestId).push(h)
+  }
+
+  if (!byRequest.size) {
+    page({
+      title: 'History',
+      sections: [
+        {
+          id: 'none',
+          label: 'Nothing yet',
+          icon: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+          blurb: 'Runs from this session appear here.',
+          render: () =>
+            el('p', { class: 'note', text: 'Send a request and every run of it is kept here until Prism closes. Nothing is written to disk.' })
+        }
+      ],
+      active: 'none',
+      onPick: () => {}
+    })
+    return
+  }
+
+  const ids = [...byRequest.keys()]
+  if (!byRequest.has(historyOf)) historyOf = ids[0]
+
+  const sections = ids.map((id) => {
+    const runs = byRequest.get(id)
+    const worst = runs.some((r) => r.failed)
+    return {
+      id,
+      label: runs[0].name,
+      icon: worst ? '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>' : '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      blurb: `${runs.length} run${runs.length === 1 ? '' : 's'} · ${runs[0].method} ${shortPath(runs[0].url)}`,
+      render: () => historyFor(runs)
+    }
+  })
+
+  page({ title: 'History', sections, active: historyOf, onPick: (id) => {
+    historyOf = id
+    openHistory()
+  } })
+}
+
+function historyFor(runs) {
+  const box = el('div')
+  const times = runs.map((r) => r.ms)
+  const slowest = Math.max(...times, 1)
+  const failed = runs.filter((r) => r.failed).length
+
+  box.append(
+    el('div', { class: 'tiles' }, [
+      tile('', String(runs.length), 'runs'),
+      tile(failed ? 'bad' : 'ok', `${runs.length - failed}/${runs.length}`, 'passed'),
+      tile('info', `${Math.round(times.reduce((a, b) => a + b, 0) / times.length)}`, 'ms average'),
+      tile(slowest > 1000 ? 'warn' : '', String(slowest), 'ms slowest')
+    ])
+  )
+
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Every run' }), el('em', { text: 'newest first' })]))
+  for (const h of runs) {
+    box.append(
+      el('button', { class: 'run-row', type: 'button', onclick: () => {
         closeSheet()
         pick(h.requestId)
       } }, [
         el('span', { class: 'when', text: new Date(h.at).toLocaleTimeString() }),
-        el('span', { class: `verb ${h.method.toLowerCase()}`, text: h.method }),
         el('span', { class: `code ${tone(h.status)}`, text: String(h.status || 'ERR') }),
-        el('span', { class: 'nm', text: h.name }),
-        el('span', { class: 'ms', text: `${h.ms}ms` }),
-        el('span', { class: 'when', text: h.env })
+        // A bar rather than only a number: the point of a list of runs is the
+        // shape of it, and eight numbers in a column do not have one.
+        el('span', { class: 'run-bar' }, [
+          el('span', {
+            class: `run-fill${h.ms > 1000 ? ' slow' : ''}`,
+            style: `width:${Math.max(2, (h.ms / slowest) * 100)}%`
+          })
+        ]),
+        el('span', { class: 'run-ms', text: `${h.ms} ms` }),
+        el('span', { class: 'run-env', text: h.env })
       ])
     )
   }
-  sheet({ title: 'History', blurb: 'Every run in this session, newest first.', body, acts: [] })
+  return box
 }
 
 /* ============================================================== flow run */
 
-async function runFlow() {
+async function runFlow(only) {
   const req = current()
-  const flow = (req ? flowOf(req.id) : null) ?? allFlows().find((f) => f.requests.length)
+  const flow = only ?? (req ? flowOf(req.id) : null) ?? allFlows().find((f) => f.requests.length)
   if (!flow) {
     toast('bad', 'There is no flow to run.')
     return
@@ -2021,6 +2999,13 @@ async function runFlow() {
   }
   const failed = state.filter((s) => s.status === 'fail').length
   toast(failed ? 'bad' : 'ok', `${flow.name} — ${state.length - failed} passed, ${failed} failed`)
+}
+
+/** Every flow in a collection, in order. */
+async function runCollection(col) {
+  for (const flow of col.flows) {
+    if (flow.requests.length) await runFlow(flow)
+  }
 }
 
 /* ================================================================= sheets */
@@ -2080,13 +3065,134 @@ function ask({ title, blurb, danger }) {
   })
 }
 
-function confirmSheet({ title, blurb, danger, onYes }) {
-  sheet({
-    title,
-    blurb,
-    body: el('p', { class: 'note', text: 'This cannot be undone from inside Prism.' }),
-    acts: [{ label: danger, bad: true, onClick: onYes }]
-  })
+/**
+ * A destructive confirm.
+ *
+ * Its own shape, not the wide sheet. Three things a generic "are you sure"
+ * cannot do, and all three are the reason this exists:
+ *
+ *   1. It shows the thing. Reading the name of what you are about to delete
+ *      off a card that looks like the card on the plane removes the whole
+ *      class of "wrong one selected" mistake.
+ *   2. It lists what goes with it, counted rather than implied.
+ *   3. It names the damage downstream. Deleting a request that gives a
+ *      variable quietly breaks every request that spends it, and that is the
+ *      consequence nobody thinks of until the next run goes red.
+ *
+ * Cancel is the default: it is focused on open, and Escape takes it.
+ */
+function askDelete({ kind, subject, goes, breaks, danger, onYes }) {
+  const veil = $('veil')
+  veil.replaceChildren()
+  veil.hidden = false
+  sheetUp = true
+  onSheetClose = null
+
+  const body = el('div', { class: 'ask-body' })
+
+  body.append(
+    el('div', { class: 'ask-head' }, [
+      el('span', { class: 'ask-mark', html: ico('<path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/>', 17, 1.8) }),
+      el('div', {}, [
+        el('h2', { text: `Delete this ${kind}?` }),
+        el('p', { text: 'It cannot be brought back from inside Prism.' })
+      ])
+    ])
+  )
+
+  body.append(subject)
+
+  if (goes.length) {
+    body.append(el('div', { class: 'ask-label', text: 'What goes with it' }))
+    body.append(el('ul', { class: 'ask-list' }, goes.map((g) => el('li', { text: g }))))
+  }
+
+  if (breaks.length) {
+    // Counted by request, not by dependency: one request that spends two of
+    // this one's variables is still one request, and saying "9 requests"
+    // when six are affected is the kind of small lie that costs trust.
+    const affected = new Set(breaks.map((b) => b.name)).size
+    body.append(
+      el('div', { class: 'ask-warn' }, [
+        el('span', { class: 'ask-warn-mark', html: ico('<path d="M12 4 22 20H2z"/><path d="M12 10v4M12 17h.01"/>', 15, 1.7) }),
+        el('div', {}, [
+          el('b', { text: affected === 1 ? 'One request depends on this' : `${affected} requests depend on this` }),
+          el('p', {
+            html: breaks
+              .map((b) => `<code>${esc(b.name)}</code> needs <code>{{${esc(b.variable)}}}</code>`)
+              .slice(0, 4)
+              .join('<br />') + (breaks.length > 4 ? `<br />and ${breaks.length - 4} more` : '')
+          }),
+          el('em', { text: 'They will show the variable as missing until something else provides it.' })
+        ])
+      ])
+    )
+  }
+
+  const cancel = el('button', { class: 'btn plain', type: 'button', text: 'Cancel', onclick: closeSheet })
+  body.append(
+    el('div', { class: 'ask-acts' }, [
+      cancel,
+      el('button', { class: 'btn bad', type: 'button', text: danger, onclick: () => {
+        closeSheet()
+        onYes()
+      } })
+    ])
+  )
+
+  veil.append(el('div', { class: 'ask' }, [body]))
+  veil.onpointerdown = (e) => {
+    if (e.target === veil) closeSheet()
+  }
+  // Cancel takes the focus, so a stray Enter or Space does nothing destructive.
+  cancel.focus()
+}
+
+/** The row a confirm shows, drawn like the node it refers to. */
+function subjectCard(req) {
+  return el('div', { class: 'ask-subject' }, [
+    el('span', { class: `verb ${req.method.toLowerCase()}`, text: req.method }),
+    el('div', { class: 'ask-subject-words' }, [
+      el('b', { text: req.name || 'Untitled' }),
+      el('span', { html: pathLabel(req.url) })
+    ])
+  ])
+}
+
+function subjectGroup(icon, name, sub) {
+  return el('div', { class: 'ask-subject' }, [
+    el('span', { class: 'ask-subject-icon', html: ico(icon, 15, 1.8) }),
+    el('div', { class: 'ask-subject-words' }, [el('b', { text: name }), el('span', { text: sub })])
+  ])
+}
+
+/**
+ * Which requests spend a variable that this one is the only source of.
+ *
+ * "Only source" matters: if the environment also sets it, or a second request
+ * captures the same name, deleting this one breaks nothing and saying it would
+ * is a false alarm.
+ */
+function dependants(going) {
+  const goingIds = new Set(going.map((r) => r.id))
+  const known = envValues()
+  const out = []
+
+  for (const req of going) {
+    for (const cap of req.captures ?? []) {
+      if (!cap.name) continue
+      if (Object.prototype.hasOwnProperty.call(known, cap.name)) continue
+      const otherSource = allRequests().some(
+        (r) => !goingIds.has(r.id) && (r.captures ?? []).some((c) => c.name === cap.name)
+      )
+      if (otherSource) continue
+      for (const user of allRequests()) {
+        if (goingIds.has(user.id)) continue
+        if (variablesUsed(user).includes(cap.name)) out.push({ name: user.name, variable: cap.name })
+      }
+    }
+  }
+  return out
 }
 
 function closeSheet() {
@@ -2115,8 +3221,8 @@ function openPalette() {
     { label: 'Run the flow', sub: 'in order', run: runFlow },
     { label: 'New collection', sub: 'empty', run: newCollection },
     { label: 'Tidy the plane', sub: 'lay out in order', run: tidy },
-    { label: 'Settings', sub: 'theme, sending, safety', run: openSettings },
-    { label: 'Switch theme', sub: 'dark or light', run: cycleTheme }
+    { label: 'Settings', sub: 'theme, sending, safety', run: () => openSettings() },
+    { label: 'Help', sub: 'how any of this works', run: () => openHelp() }
   )
 
   let index = 0
@@ -2180,8 +3286,8 @@ function wire() {
   $('envBtn').onclick = openEnvironments
   $('historyBtn').onclick = openHistory
   $('finder').onclick = openPalette
-  $('settingsBtn').onclick = openSettings
-  $('themeBtn').onclick = cycleTheme
+  $('settingsBtn').onclick = () => openSettings()
+  $('helpBtn').onclick = () => openHelp()
   $('newCollectionBtn').onclick = newCollection
   $('intakeHide').onclick = () => {
     $('intake').hidden = true
@@ -2228,24 +3334,44 @@ function wire() {
     const req = current()
     if (req) send(req)
   }
-  $('benchDelete').onclick = () => {
+  $('reqGrow').onclick = () => fillPane('request')
+  $('resGrow').onclick = () => fillPane('response')
+  $('reqFold').onclick = () => foldPane('request')
+  $('resFold').onclick = () => foldPane('response')
+  // Double-click the handle to go back to an even split, which is what people
+  // try first when they have dragged it somewhere unhelpful.
+  $('benchGrip').ondblclick = () => {
+    S.split = 55
+    S.pane = 'split'
+    layoutPanes()
+  }
+
+  $('copyBody').onclick = () => {
+    const res = S.results.get(S.pickedId)
+    if (!res) return
+    navigator.clipboard.writeText(res.json !== undefined ? JSON.stringify(res.json, null, 2) : (res.body ?? ''))
+    toast('ok', 'Response copied')
+  }
+  $('benchMore').onclick = (e) => {
     const req = current()
-    if (req) askDeleteRequest(req)
+    if (req) openMenu(e.currentTarget, requestMenu(req))
   }
 
   const grip = $('benchGrip')
   grip.onkeydown = (e) => {
-    if (e.key === 'ArrowUp') S.split = clamp(S.split - 4, 20, 85)
-    if (e.key === 'ArrowDown') S.split = clamp(S.split + 4, 20, 85)
-    paintBench()
+    if (e.key === 'ArrowUp') S.split = clamp(S.split - 4, 15, 88)
+    if (e.key === 'ArrowDown') S.split = clamp(S.split + 4, 15, 88)
+    S.pane = 'split'
+    layoutPanes()
   }
   grip.onpointerdown = (e) => {
+    S.pane = 'split'
     const host = $('benchSplit')
     const box = host.getBoundingClientRect()
     e.currentTarget.setPointerCapture(e.pointerId)
     const move = (ev) => {
-      S.split = clamp(((ev.clientY - box.top) / box.height) * 100, 20, 85)
-      host.style.gridTemplateRows = `minmax(120px, ${S.split}fr) 7px minmax(110px, ${100 - S.split}fr)`
+      S.split = clamp(((ev.clientY - box.top) / box.height) * 100, 15, 88)
+      layoutPanes()
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
@@ -2259,6 +3385,12 @@ function wire() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
       sheetUp ? closeSheet() : openPalette()
+    } else if (e.key === 'F2' && S.pickedId && !sheetUp) {
+      e.preventDefault()
+      startRename(S.pickedId)
+    } else if (e.key === 'F1') {
+      e.preventDefault()
+      openHelp()
     } else if (e.key === 'Escape' && sheetUp) {
       closeSheet()
     } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -2268,16 +3400,6 @@ function wire() {
   })
 
   window.addEventListener('resize', drawBeams)
-}
-
-/** Dark → light → follow the system, from the bar. */
-function cycleTheme() {
-  const order = ['dark', 'light', 'system']
-  const next = order[(order.indexOf(S.prefs.theme) + 1) % order.length]
-  setPref('theme', next)
-  applyTheme()
-  paintBar()
-  toast('ok', next === 'system' ? 'Following the system theme' : `${next[0].toUpperCase()}${next.slice(1)} theme`)
 }
 
 function boot() {

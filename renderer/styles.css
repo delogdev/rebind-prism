@@ -20,12 +20,15 @@
    ========================================================================== */
 
 :root {
-  --void: #06070a;
-  --s0: #090b10;
-  --s1: #0e1117;
-  --s2: #141822;
-  --s3: #1b2130;
-  --s4: #262e40;
+  /* True black. On an OLED panel an unlit pixel draws no power and has no
+     glow, so the plane — much the largest area — is #000 rather than a very
+     dark grey pretending to be one. The panels lift off it from there. */
+  --void: #000000;
+  --s0: #000000;
+  --s1: #0a0c11;
+  --s2: #12151c;
+  --s3: #1a1f28;
+  --s4: #252b36;
 
   --edge: rgb(255 255 255 / 0.06);
   --edge-2: rgb(255 255 255 / 0.11);
@@ -34,8 +37,8 @@
 
   --ink: #eef1f7;
   --ink-2: #a4adbf;
-  --ink-3: #6a7387;
-  --ink-4: #454d5e;
+  --ink-3: #7a8393;
+  --ink-4: #5c6472;
 
   /* Values in motion. Never used for state, never for outcomes. */
   --cyan: #3be8ff;
@@ -129,8 +132,8 @@
 
     --ink: #0f172a;
     --ink-2: #45536b;
-    --ink-3: #6b7891;
-    --ink-4: #94a0b4;
+    --ink-3: #64708a;
+    --ink-4: #7d8798;
 
     --cyan: #0891b2;
     --indigo: #6d28d9;
@@ -184,8 +187,8 @@
 
   --ink: #0f172a;
   --ink-2: #45536b;
-  --ink-3: #6b7891;
-  --ink-4: #94a0b4;
+  --ink-3: #64708a;
+  --ink-4: #7d8798;
 
   --cyan: #0891b2;
   --indigo: #6d28d9;
@@ -619,26 +622,40 @@ textarea {
   margin-bottom: 4px;
 }
 
+/* One grid for all three levels. The actions button occupies its column
+   whether or not it is visible, so nothing moves when the pointer crosses a
+   row — a target that shifts as you reach for it is a target you miss. */
 .col-row,
 .flow-row,
 .req-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto 22px;
   align-items: center;
   gap: 7px;
   width: 100%;
+  min-height: 28px;
+  padding: 3px 4px 3px 5px;
   border: 1px solid transparent;
   border-radius: var(--r1);
   background: transparent;
-  text-align: left;
   color: var(--ink-2);
   transition: background var(--t) var(--ease);
 }
 
 .col-row {
-  padding: 6px 6px 6px 5px;
   font-size: 11.5px;
   font-weight: 650;
   color: var(--ink);
+}
+
+.flow-row {
+  font-size: 11.5px;
+  font-weight: 560;
+}
+
+.req-row {
+  font-size: 11.5px;
+  padding-left: 8px;
 }
 
 .col-row:hover,
@@ -647,12 +664,23 @@ textarea {
   background: var(--s2);
 }
 
+.req-row.on {
+  background: var(--sel-soft);
+  border-color: var(--edge-3);
+  color: var(--ink);
+}
+
+/* Rows without a twist or a glyph still occupy those columns, so names line
+   up down the whole tree rather than stepping in and out by level. */
+.req-row > .verb {
+  grid-column: 2;
+}
+
 .twist {
   display: grid;
   place-items: center;
   width: 16px;
   height: 16px;
-  flex: none;
   border: 0;
   background: none;
   color: var(--ink-4);
@@ -660,14 +688,28 @@ textarea {
   transition: transform var(--t) var(--ease);
 }
 
+.twist:hover {
+  color: var(--ink-2);
+}
+
 .shut > .col-row .twist,
 .shut > .flow-row .twist {
   transform: rotate(-90deg);
 }
+
 .shut .kids {
   display: none;
 }
 
+/* A flow and its requests, stacked. */
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Takes the slack in a row, and truncates rather than pushing its neighbours
+   out. Used wherever a name sits between fixed things. */
 .grow {
   flex: 1;
   min-width: 0;
@@ -676,48 +718,7 @@ textarea {
   white-space: nowrap;
 }
 
-.tag {
-  flex: none;
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-4);
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--s3);
-}
-
-.count {
-  flex: none;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-4);
-}
-
-.kids {
-  padding-left: 8px;
-  margin-left: 12px;
-  border-left: 1px solid var(--edge);
-}
-
-.flow-row {
-  padding: 5px 6px 5px 4px;
-  font-size: 11.5px;
-  font-weight: 560;
-}
-
-.req-row {
-  padding: 4px 6px 4px 8px;
-  font-size: 11.5px;
-}
-
-.req-row.on {
-  background: var(--sel-soft);
-  border-color: var(--edge-3);
-  color: var(--ink);
-}
-
+/* The method badge, used in the tree, on every node and in the confirm. */
 .verb {
   flex: none;
   min-width: 40px;
@@ -739,75 +740,98 @@ textarea {
 .verb.options {
   color: var(--verb-read);
 }
+
 .verb.post {
   color: var(--pass);
   background: var(--pass-bg);
 }
+
 .verb.put,
 .verb.patch {
   color: var(--hold);
   background: var(--hold-bg);
 }
+
 .verb.delete {
   color: var(--fail);
   background: var(--fail-bg);
 }
 
-.state {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--rf);
-  background: var(--s4);
-}
-.state.pass {
-  background: var(--pass);
-}
-.state.fail {
-  background: var(--fail);
-}
-.state.busy {
-  background: var(--cyan);
-  animation: blink 1s var(--ease) infinite;
+/* The spine each level hangs off. It is what makes the tree read as a tree
+   rather than as a list with varying indents. */
+.kids {
+  padding-left: 8px;
+  margin-left: 13px;
+  border-left: 1px solid var(--edge);
 }
 
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.25;
-  }
-}
-
-.rowbtn {
-  flex: none;
+.row-glyph {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  color: var(--ink-4);
+}
+
+.row-name {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-rename {
+  grid-column: 3 / span 2;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--cyan);
+  border-radius: 5px;
+  background: var(--s0);
+  font: inherit;
+  color: var(--ink);
+}
+
+.row-rename:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(59 232 255 / 0.18);
+}
+
+.row-more {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   border: 0;
   border-radius: 5px;
   background: transparent;
   color: var(--ink-4);
   opacity: 0;
-  transition: opacity var(--t) var(--ease), color var(--t) var(--ease);
+  transition: opacity var(--t) var(--ease), background var(--t) var(--ease), color var(--t) var(--ease);
 }
 
-.col-row:hover .rowbtn,
-.flow-row:hover .rowbtn,
-.req-row:hover .rowbtn {
+.col-row:hover .row-more,
+.flow-row:hover .row-more,
+.req-row:hover .row-more,
+.row-more:focus-visible,
+.row-more[aria-expanded='true'] {
   opacity: 1;
 }
 
-.rowbtn:hover {
-  color: var(--ink);
+.row-more:hover {
   background: var(--s4);
+  color: var(--ink);
 }
-.rowbtn.del:hover {
-  color: var(--fail);
-  background: var(--fail-bg);
+
+.count,
+.tag,
+.state {
+  justify-self: end;
 }
 
 .tree-nothing {
@@ -880,6 +904,17 @@ textarea {
 }
 
 .plane.dragging {
+  cursor: grabbing;
+}
+
+/* Space held: the whole plane becomes draggable, nodes included, and says so. */
+.plane.ready,
+.plane.ready .node {
+  cursor: grab;
+}
+
+.plane.ready.dragging,
+.plane.ready.dragging .node {
   cursor: grabbing;
 }
 
@@ -1420,6 +1455,7 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   flex: 1;
 }
 
@@ -1567,15 +1603,30 @@ textarea {
 .bench-split {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: grid;
   grid-template-rows: minmax(120px, 1fr) 7px minmax(110px, 1fr);
   margin-top: 10px;
+}
+
+/* Explicit rows. Hiding the handle takes it out of the grid's flow, and the
+   response pane then slides up into the handle's row and renders 7px tall —
+   which is exactly what happened. */
+#reqPane {
+  grid-row: 1;
+}
+#benchGrip {
+  grid-row: 2;
+}
+#resPane {
+  grid-row: 3;
 }
 
 .bench-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .bench-grip {
@@ -1601,14 +1652,16 @@ textarea {
   outline: none;
 }
 
+/* Tabs as pills rather than an underline. Bigger targets, a clearer active
+   state at a glance, and the same treatment as every other segmented control
+   in the app. */
 .tabs {
   display: flex;
-  gap: 1px;
+  gap: 2px;
   flex: none;
-  padding: 0 10px;
+  padding: 5px 8px;
   overflow-x: auto;
   scrollbar-width: none;
-  border-bottom: 1px solid var(--edge);
 }
 
 .tabs::-webkit-scrollbar {
@@ -1618,30 +1671,27 @@ textarea {
 .tab {
   position: relative;
   flex: none;
-  padding: 8px 9px;
+  height: 22px;
+  padding: 0 9px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--ink-4);
   font-size: 11px;
   font-weight: 550;
   white-space: nowrap;
-  transition: color var(--t) var(--ease);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 
 .tab:hover {
+  background: var(--s2);
   color: var(--ink-2);
 }
-.tab.on {
-  color: var(--ink);
-}
 
-.tab.on::after {
-  content: '';
-  position: absolute;
-  inset: auto 7px -1px;
-  height: 2px;
-  border-radius: var(--rf);
-  background: var(--sel);
+.tab.on {
+  background: var(--s3);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .tab b {
@@ -1649,11 +1699,16 @@ textarea {
   margin-left: 5px;
   padding: 0 4px;
   border-radius: 4px;
-  background: var(--s3);
+  background: var(--s4);
   font-size: 9px;
   font-weight: 700;
   color: var(--ink-3);
   vertical-align: 1px;
+}
+
+.tab.on b {
+  background: var(--tick-on);
+  color: var(--ink);
 }
 
 .tab b.bad {
@@ -1664,6 +1719,7 @@ textarea {
 .tabbody {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   padding: 10px 14px 16px;
 }
@@ -1703,15 +1759,23 @@ textarea {
 }
 
 .tick {
+  position: relative;
   appearance: none;
   flex: none;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border: 1.5px solid var(--edge-3);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--s0);
   display: grid;
   place-items: center;
+}
+
+/* The hit area, five pixels bigger on every side than the box you can see. */
+.tick::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
 }
 
 .tick:checked {
@@ -1721,8 +1785,8 @@ textarea {
 
 .tick:checked::after {
   content: '';
-  width: 6px;
-  height: 3.5px;
+  width: 7px;
+  height: 4px;
   border-left: 2px solid var(--on-sel);
   border-bottom: 2px solid var(--on-sel);
   transform: rotate(-45deg) translate(1px, -1px);
@@ -3092,4 +3156,855 @@ pre.src .ln::before {
   font-size: 10.5px;
   color: var(--ink-4);
   min-width: 26px;
+}
+
+/* ================================================================== pages
+
+   Settings and Help share one shell: a nav rail down the left, a scrolling
+   column on the right, and enough width that a paragraph is a paragraph. A
+   modal the size of a dialog is the wrong container for either of them. */
+
+.page {
+  position: relative;
+  width: min(980px, 100%);
+  height: min(76vh, 720px);
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  border-radius: var(--r4);
+  border: 1px solid var(--edge-2);
+  background: var(--s1);
+  box-shadow: var(--drop-xl);
+  overflow: hidden;
+}
+
+.page-nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px 10px 10px;
+  background: var(--s0);
+  border-right: 1px solid var(--edge);
+}
+
+.page-nav h3 {
+  margin: 0 0 12px 8px;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.page-nav button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 550;
+  text-align: left;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+
+.page-nav button:hover {
+  background: var(--s2);
+  color: var(--ink);
+}
+
+.page-nav button.on {
+  background: var(--sel-soft);
+  border-color: var(--edge-2);
+  color: var(--ink);
+}
+
+.page-nav .spacer {
+  flex: 1;
+}
+
+.page-nav footer {
+  padding: 10px 10px 2px;
+  border-top: 1px solid var(--edge);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--ink-4);
+}
+
+.page-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.page-head {
+  flex: none;
+  padding: 20px 26px 14px;
+  border-bottom: 1px solid var(--edge);
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.page-head p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.6;
+  max-width: 68ch;
+}
+
+.page-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 26px 26px;
+}
+
+.page-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--edge-2);
+  border-radius: 8px;
+  background: var(--s1);
+  color: var(--ink-3);
+}
+
+.page-close:hover {
+  background: var(--s3);
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------- help text */
+
+.doc h4 {
+  margin: 22px 0 8px;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+
+.doc h4:first-child {
+  margin-top: 0;
+}
+
+.doc p {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+
+.doc ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+
+.doc li {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+  max-width: 68ch;
+}
+
+.doc strong {
+  color: var(--ink);
+  font-weight: 620;
+}
+
+.doc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--s2);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.doc .keys {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 5px 14px;
+  margin: 0 0 14px;
+  font-size: 12px;
+}
+
+.doc .keys dt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.doc .keys dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.doc .callout {
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--cyan);
+  background: var(--s0);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+
+.doc .callout.warn {
+  border-left-color: var(--hold);
+}
+
+/* Legend used in Help to explain the node, drawn rather than described. */
+.doc .swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.doc .swatch i {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--rf);
+  flex: none;
+}
+
+/* --------------------------------------------------- node spec strip */
+
+.spec {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 10px 8px 12px;
+}
+
+.sc {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--s3);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.01em;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.sc.auth {
+  background: var(--hold-bg);
+  color: var(--hold);
+}
+
+.sc.open {
+  color: var(--ink-4);
+}
+
+.sc.body {
+  background: var(--pass-bg);
+  color: var(--pass);
+}
+
+.sc.host {
+  color: var(--ink-4);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code.ghost {
+  opacity: 0.55;
+}
+
+/* ============================================================= the confirm
+
+   Its own shape rather than the wide sheet: a destructive decision wants a
+   small, still surface with the thing itself on it, not a page. */
+
+.ask {
+  width: min(440px, 100%);
+  align-self: center;
+  border-radius: var(--r4);
+  border: 1px solid var(--edge-2);
+  background: var(--s1);
+  box-shadow: var(--drop-xl);
+  overflow: hidden;
+}
+
+.ask-body {
+  padding: 20px 20px 16px;
+}
+
+.ask-head {
+  display: flex;
+  gap: 13px;
+  margin-bottom: 16px;
+}
+
+.ask-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--rf);
+  background: var(--fail-bg);
+  color: var(--fail);
+}
+
+.ask-head h2 {
+  margin: 1px 0 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.ask-head p {
+  margin: 3px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+/* The thing itself, drawn like the node it refers to. Reading the name off a
+   familiar shape removes the whole class of wrong-one-selected mistake. */
+.ask-subject {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r3);
+  background: var(--s0);
+}
+
+.ask-subject-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--s3);
+  color: var(--ink-3);
+}
+
+.ask-subject-words {
+  min-width: 0;
+  flex: 1;
+}
+
+.ask-subject-words b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 620;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-subject-words span {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-label {
+  margin: 16px 0 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.ask-list {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.ask-list li {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  margin-bottom: 3px;
+}
+
+/* The consequence nobody thinks of, which is the reason this dialog exists. */
+.ask-warn {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border-radius: var(--r3);
+  border: 1px solid rgb(251 191 36 / 0.35);
+  background: var(--hold-bg);
+}
+
+.ask-warn-mark {
+  flex: none;
+  color: var(--hold);
+  margin-top: 1px;
+}
+
+.ask-warn b {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 630;
+  color: var(--hold);
+}
+
+.ask-warn p {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+
+.ask-warn code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--s2);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink);
+}
+
+.ask-warn em {
+  display: block;
+  margin-top: 6px;
+  font-style: normal;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.ask-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 1px solid var(--edge);
+}
+
+.legend-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--edge-2);
+  padding: 0;
+}
+
+.legend-gesture {
+  color: var(--ink-4);
+}
+
+/* ================================================================== menus */
+
+.menu {
+  position: fixed;
+  z-index: 95;
+  min-width: 208px;
+  padding: 5px;
+  border-radius: var(--r3);
+  border: 1px solid var(--edge-2);
+  background: var(--glass-strong);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--drop-lg);
+  animation: menuin 120ms var(--ease);
+}
+
+@keyframes menuin {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-align: left;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--s3);
+  color: var(--ink);
+}
+
+/* Keyboard focus gets a ring as well as the background. Sharing hover's
+   treatment would mean you cannot tell which row the keyboard is on while the
+   pointer is also over the menu. */
+.menu-item:focus-visible {
+  background: var(--s3);
+  color: var(--ink);
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--cyan);
+}
+
+.menu-item:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.menu-item.danger {
+  color: var(--fail);
+}
+
+.menu-item.danger:hover {
+  background: var(--fail-bg);
+}
+
+.menu-icon {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  flex: none;
+  color: var(--ink-4);
+}
+
+.menu-item.danger .menu-icon {
+  color: var(--fail);
+}
+
+.menu-item:hover:not(:disabled) .menu-icon {
+  color: inherit;
+}
+
+.menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-keys {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-4);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--edge);
+}
+
+/* ============================================== request / response panes
+
+   Two labelled halves rather than two anonymous stacks of tabs. The response
+   header is there before anything is sent and says so, because a panel that
+   only appears after the first send is a panel nobody knows is there. */
+
+.bench-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.bench-pane.resp {
+  background: var(--s0);
+  border-top: 1px solid var(--edge);
+}
+
+.pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px 0 6px;
+  border-bottom: 1px solid var(--edge);
+}
+
+/* The name of the half doubles as the control that folds it. Two separate
+   things — a label and a chevron — would be the same click twice. */
+.pane-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-4);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+
+.pane-fold:hover {
+  background: var(--s3);
+  color: var(--ink-2);
+}
+
+.pane-fold svg {
+  transition: transform var(--t) var(--ease);
+}
+
+.pane-fold[aria-expanded='false'] svg {
+  transform: rotate(-90deg);
+}
+
+.pane-gap {
+  flex: 1;
+}
+
+.pane-icon,
+.pane-grow {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-4);
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+
+.pane-icon:hover,
+.pane-grow:hover {
+  background: var(--s3);
+  color: var(--ink);
+}
+
+.pane-grow.on {
+  background: var(--sel-soft);
+  color: var(--ink);
+}
+
+/* Filling one half rotates the other's arrows inward — the same button now
+   means "give it back". */
+.pane-grow.on svg {
+  transform: rotate(180deg);
+}
+
+.pane-icon[disabled] {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* A folded half keeps its bar. A collapsed pane you cannot see is a pane you
+   cannot get back. */
+.bench-pane.folded > .tabbody,
+.bench-pane.folded > .tabs {
+  display: none;
+}
+
+.bench-pane.folded .pane-bar {
+  border-bottom: 0;
+}
+
+.resp-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.stat {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.stat.pass {
+  color: var(--pass);
+}
+.stat.fail {
+  color: var(--fail);
+}
+
+.stat-none {
+  font-size: 10.5px;
+  color: var(--ink-4);
+}
+
+.mini-btn[disabled] {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* ================================================= export and history pages */
+
+.export-page .page-nav {
+  overflow-y: auto;
+}
+
+.export-scope {
+  margin: 0 2px 12px;
+}
+
+.export-scope .segbtn {
+  flex: 1;
+  padding: 5px 6px;
+  font-size: 10.5px;
+}
+
+.nav-group {
+  margin: 12px 0 4px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.exp-ext {
+  flex: none;
+  min-width: 46px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--s3);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 650;
+  text-align: center;
+  color: var(--ink-4);
+}
+
+.page-nav button.on .exp-ext {
+  background: var(--tick-on);
+  color: var(--ink);
+}
+
+.file-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+  padding: 10px 26px;
+  border-bottom: 1px solid var(--edge);
+  background: var(--s0);
+}
+
+.file-name {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-body {
+  padding-top: 0;
+}
+
+.file-body pre.src {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+  padding-left: 0;
+}
+
+/* A run, with its duration drawn as well as printed — eight numbers in a
+   column have no shape, and the shape is what people come here to see. */
+.run-row {
+  display: grid;
+  grid-template-columns: 66px 58px minmax(60px, 1fr) 62px 90px;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  background: var(--s0);
+  margin-bottom: 4px;
+  text-align: left;
+}
+
+.run-row:hover {
+  border-color: var(--edge-3);
+  background: var(--s2);
+}
+
+.run-row .when {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-4);
+}
+
+.run-bar {
+  height: 6px;
+  border-radius: var(--rf);
+  background: var(--s3);
+  overflow: hidden;
+}
+
+.run-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--rf);
+  background: var(--cyan);
+}
+
+.run-fill.slow {
+  background: var(--hold);
+}
+
+.run-ms {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  text-align: right;
+}
+
+.run-env {
+  font-size: 10px;
+  color: var(--ink-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

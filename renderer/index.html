@@ -61,11 +61,11 @@
           Run flow
         </button>
 
-        <button class="icobtn" id="themeBtn" type="button" title="Theme" aria-label="Switch theme">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
-            <circle cx="12" cy="12" r="4.2" />
-            <path class="rays" d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4" />
-            <path class="moon" d="M15.5 12a5 5 0 0 1-6.4-4.8A5.4 5.4 0 1 0 15.5 12z" fill="currentColor" stroke="none" />
+        <button class="icobtn" id="helpBtn" type="button" title="Help" aria-label="Help">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.2 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.8 2.4-2.8 4" />
+            <path d="M12 17.4h.01" />
           </svg>
         </button>
         <button class="icobtn" id="settingsBtn" type="button" title="Settings" aria-label="Settings">
@@ -126,6 +126,8 @@
           <span><i class="lg needs"></i>needs</span>
           <span><i class="lg gives"></i>gives</span>
           <span><i class="lg beam"></i>value travels</span>
+          <span class="legend-sep"></span>
+          <span class="legend-gesture">scroll to pan &middot; ctrl+scroll to zoom &middot; space-drag anywhere</span>
         </div>
 
         <div class="intake" id="intake" hidden>
@@ -160,8 +162,8 @@
           <div class="bench-head">
             <span class="verb" id="benchVerb">GET</span>
             <input class="bench-name" id="benchName" aria-label="Request name" />
-            <button class="mini-btn danger" id="benchDelete" type="button" title="Delete this request" aria-label="Delete this request">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13" /></svg>
+            <button class="mini-btn" id="benchMore" type="button" title="Actions" aria-label="Actions for this request" aria-haspopup="menu">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" /></svg>
             </button>
           </div>
 
@@ -180,15 +182,44 @@
           <p class="wire-preview" id="wirePreview"></p>
 
           <div class="bench-split" id="benchSplit">
-            <div class="bench-pane">
+            <section class="bench-pane" id="reqPane">
+              <header class="pane-bar">
+                <button class="pane-fold" id="reqFold" type="button" aria-expanded="true" aria-controls="editBody">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                  <span>Request</span>
+                </button>
+                <span class="pane-gap"></span>
+                <button class="pane-grow" id="reqGrow" type="button" title="Fill the panel" aria-label="Expand the request">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10V4h6" /><path d="M20 14v6h-6" /><path d="M4 4l6 6" /><path d="M20 20l-6-6" /></svg>
+                </button>
+              </header>
               <div class="tabs" id="editTabs" role="tablist"></div>
               <div class="tabbody" id="editBody"></div>
-            </div>
+            </section>
+
             <div class="bench-grip" id="benchGrip" role="separator" aria-orientation="horizontal" aria-label="Resize" tabindex="0"><span></span></div>
-            <div class="bench-pane">
+
+            <!-- The response half keeps its header whether or not anything has
+                 been sent, so it is visibly where the answer appears rather
+                 than a strip that materialises later. -->
+            <section class="bench-pane resp" id="resPane">
+              <header class="pane-bar">
+                <button class="pane-fold" id="resFold" type="button" aria-expanded="true" aria-controls="respBody">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                  <span>Response</span>
+                </button>
+                <div class="resp-stats" id="respStats"></div>
+                <span class="pane-gap"></span>
+                <button class="pane-icon" id="copyBody" type="button" title="Copy the response body" aria-label="Copy the response body">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                </button>
+                <button class="pane-grow" id="resGrow" type="button" title="Fill the panel" aria-label="Expand the response">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10V4h6" /><path d="M20 14v6h-6" /><path d="M4 4l6 6" /><path d="M20 20l-6-6" /></svg>
+                </button>
+              </header>
               <div class="tabs" id="respTabs" role="tablist"></div>
               <div class="tabbody" id="respBody"></div>
-            </div>
+            </section>
           </div>
         </div>
       </aside>
