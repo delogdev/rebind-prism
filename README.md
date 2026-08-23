@@ -16,8 +16,11 @@ npm start
 ```
 
 ```bash
-npm test          # 110 tests. No Electron, no browser, no display needed.
+npm test          # 396 tests. No Electron, no browser, no display needed.
 npm run dist      # installers for the current platform
+
+# and in CI
+npx prism-run checkout.prism.json --env CI --reporter junit --out results.xml
 ```
 
 The only dependencies are Electron and electron-builder, both dev-only. The
@@ -138,7 +141,107 @@ the machine.
 
 ---
 
+## Your work is kept
+
+Collections, environments, node positions and baselines are written to this
+machine as you go, and come back next time. **Save workspace** writes a
+`.prism.json` file you can commit beside your code, and the CLI runs that same
+file in CI.
+
+A value marked **secret** is never written to either. The name is kept, so
+opening a shared workspace tells you what to refill — and in CI you supply it
+as `PRISM_<NAME>` in the process environment, where it is never committed.
+
+## Baselines and drift
+
+The Diff tab compares against the previous run, which answers *did anything
+change since I last pressed send*. **Freeze** a response as a baseline and the
+Drift tab answers the useful one: has this endpoint moved away from the shape
+we agreed on?
+
+Findings are split by how much they should worry you. A field that vanished or
+changed type breaks whoever consumes it; a new field almost never does; a
+changed value is usually just the data being data. Baselines live in the
+workspace file, so a drift is reviewable in a pull request.
+
+## Data-driven runs
+
+Attach a CSV or JSON table on the **Data** tab and the request runs once per
+row, each row's columns shadowing the environment for that send only. Prism
+says which columns the request never mentions — usually a stale export or a
+typo, and cheaper to hear than to watch sixty identical results.
+
+## Asking a question of the response
+
+Every scalar in the response body is a click target: capture it as a variable
+for the next request, or assert on what it says now. The path comes from the
+printer that laid the body out, so it is the path the assertion engine will
+follow — not one read off the screen and retyped.
+
+## Is it getting slower, does it fail sometimes
+
+Runs are kept with the workspace, so History can answer both. A sparkline per
+request, a median and a p95, and a verdict that only speaks when the change is
+real — a fifth either way and at least 20ms, because a 2ms endpoint drifting to
+3ms is not a regression and saying so trains people to ignore the badge.
+
+**Run it ten times** in a request's menu looks for a flake directly. A 4xx or
+5xx counts as a failure even with nothing asserting on it.
+
+## GraphQL
+
+The query and its variables are two fields; the envelope is assembled at send
+time and the operation name is read out of the query. Errors that arrive inside
+a 200 — the failure a REST-shaped tool misses entirely — are surfaced with the
+server's own message. **Fetch the schema** lists what the endpoint can do and
+writes a runnable stub for whatever you pick.
+
+## On the command line
+
+```bash
+prism-run <workspace.json> [options]
+
+  -e, --env <name>        environment to use, by name
+  -f, --flow <name>       run only this flow
+  -r, --reporter <kind>   text | json | junit
+  -o, --out <path>        write the report to a file
+      --bail              stop at the first failure
+      --insecure          do not verify TLS certificates
+```
+
+Exits 0 when every assertion passed and 1 otherwise, which is the only thing a
+CI runner reads. Chaining, cookies, datasets and assertions all behave exactly
+as they do in the app, because it is the same `lib/` under the same tests.
+
+## The graph is the plan
+
+The plane draws an edge from the request that captures a value to the ones that
+spend it, and **Run flow** follows those edges rather than the order things
+happen to be listed in. Dependencies first; anything genuinely independent at
+the same time. A request sitting above the one that provides its token still
+runs after it — that used to be a 401 with nothing wrong on the server.
+
+A flow whose requests each wait for something another produces has no valid
+order, so Prism refuses to run it and names the loop instead of guessing.
+
+## Auth set once
+
+A collection or a flow can hold auth and headers, and a request set to
+**Inherit** picks up the nearest one. The nearest setting wins, the way it does
+in every config file. **No auth** is a decision rather than an absence, which
+is what a login endpoint needs when it must not carry the token it is about to
+go and fetch.
+
+**OAuth 2** is a grant, not a field to paste a token into: client credentials,
+password and refresh-token, fetched before a send when the held token is
+missing or about to expire. The token and the client secret stay in memory.
+
 ## What it imports
+
+
+
+Drop a file anywhere on the window, or use **Import**. Both go through the same
+front door, so what works one way works the other.
 
 | File | What Prism does with it |
 | --- | --- |
@@ -146,6 +249,10 @@ the machine.
 | Rebind **flow** export (a suite) | One flow |
 | **Postman** collection v2.1 / v2.0 | Folders become flows; auth, query rows and test scripts come across |
 | **Postman** environment | Just the variables |
+| **OpenAPI** 3 / Swagger 2 | Tags become flows; examples and enums fill the rows |
+| **Prism** workspace | Everything, including baselines and layout |
+| **HAR** capture | Assets and duplicates dropped, the shared host becomes a variable |
+| **cURL** command | Pasted from the clipboard with <kbd>Ctrl Shift V</kbd> |
 
 Two generations of the Rebind request shape are read, because a file exported
 today and one exported six months ago are both files somebody will open.

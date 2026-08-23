@@ -36,7 +36,8 @@
     "dist:dir": "electron-builder --dir",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "dist:linux": "electron-builder --linux"
+    "dist:linux": "electron-builder --linux",
+    "run": "node cli.mjs"
   },
   "devDependencies": {
     "electron": "^38.2.2",
@@ -54,7 +55,8 @@
       "lib/**/*",
       "renderer/**/*",
       "LICENSE",
-      "README.md"
+      "README.md",
+      "cli.mjs"
     ],
     "win": {
       "target": [
@@ -76,5 +78,8 @@
       ],
       "category": "Development"
     }
+  },
+  "bin": {
+    "prism-run": "./cli.mjs"
   }
 }

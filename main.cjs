@@ -9,7 +9,10 @@
  * in this file, the page cannot do it.
  */
 const { app, BrowserWindow, dialog, ipcMain, protocol, net, shell } = require('electron')
-const { readFileSync, writeFileSync } = require('node:fs')
+const { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } = require('node:fs')
+// Electron already exports a `net`; this is the socket one.
+const sockets = require('node:net')
+const tls = require('node:tls')
 const { join, extname, basename } = require('node:path')
 const { pathToFileURL } = require('node:url')
 const http = require('node:http')
@@ -33,6 +36,17 @@ protocol.registerSchemesAsPrivileged([
 
 /** @type {BrowserWindow | null} */
 let win = null
+
+/**
+ * The cookie jar, and where the workspace lives.
+ *
+ * lib/ is ESM and this file is CommonJS, so the jar is pulled in with a
+ * dynamic import once at startup rather than at the top.
+ */
+let jar = null
+const jarReady = import('./lib/cookies.js').then((m) => {
+  jar = new m.Jar()
+})
 
 function createWindow() {
   win = new BrowserWindow({
@@ -74,6 +88,23 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2'
+}
+
+/**
+ * Where the working state is kept between sessions.
+ *
+ * One file, written atomically — a workspace half-written because the machine
+ * lost power is worse than one a session out of date, so the new copy is
+ * written beside the old and moved over it only once it is complete.
+ */
+const stateDir = () => join(app.getPath('userData'), 'state')
+const autosavePath = () => join(stateDir(), 'workspace.json')
+
+function writeAtomic(path, text) {
+  mkdirSync(join(path, '..'), { recursive: true })
+  const tmp = `${path}.writing`
+  writeFileSync(tmp, text, 'utf8')
+  renameSync(tmp, path)
 }
 
 app.whenReady().then(() => {
@@ -140,11 +171,170 @@ ipcMain.handle('file:save', async (_e, { name, text, filters }) => {
   return res.filePath
 })
 
+/**
+ * Writing a response body out.
+ *
+ * Bytes, not text: a PDF or a zip that came back from an export endpoint is
+ * exactly the thing worth saving, and re-encoding it as UTF-8 on the way would
+ * quietly corrupt it.
+ */
+ipcMain.handle('file:saveBytes', async (_e, { name, base64: data, filters }) => {
+  const chosen = await dialog.showSaveDialog(win, { defaultPath: name, filters: filters ?? [{ name: 'All files', extensions: ['*'] }] })
+  if (chosen.canceled || !chosen.filePath) return null
+  try {
+    writeFileSync(chosen.filePath, Buffer.from(String(data ?? ''), 'base64'))
+    return chosen.filePath
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
 ipcMain.handle('shell:open', (_e, url) => {
   // Only ever a documentation link the page already displays.
   if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url))
   return null
 })
+
+/* ---------------------------------------------------------------- workspace */
+
+ipcMain.handle('workspace:autosave', (_e, text) => {
+  try {
+    writeAtomic(autosavePath(), String(text))
+    return { ok: true }
+  } catch (err) {
+    // Saving is best-effort. A full disk must not take the window down, and
+    // the renderer shows what happened rather than failing silently.
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('workspace:restore', () => {
+  try {
+    const path = autosavePath()
+    if (!existsSync(path)) return null
+    return { path, text: readFileSync(path, 'utf8') }
+  } catch {
+    return null
+  }
+})
+
+// Deleted, not blanked. Settings offers this as "Forget", and leaving a
+// zero-byte file behind would have the row still reporting a saved workspace.
+ipcMain.handle('workspace:forget', () => {
+  try {
+    if (existsSync(autosavePath())) rmSync(autosavePath())
+    return true
+  } catch {
+    return false
+  }
+})
+
+ipcMain.handle('workspace:saveAs', async (_e, { name, text }) => {
+  if (!win) return null
+  const res = await dialog.showSaveDialog(win, {
+    title: 'Save workspace',
+    defaultPath: join(app.getPath('documents'), `${name || 'workspace'}.prism.json`),
+    filters: [{ name: 'Prism workspace', extensions: ['json'] }]
+  })
+  if (res.canceled || !res.filePath) return null
+  writeAtomic(res.filePath, String(text))
+  return res.filePath
+})
+
+/* ------------------------------------------------------------------ cookies */
+
+ipcMain.handle('cookies:list', async () => {
+  await jarReady
+  return jar.all()
+})
+
+ipcMain.handle('cookies:clear', async () => {
+  await jarReady
+  return jar.clear()
+})
+
+ipcMain.handle('cookies:remove', async (_e, { name, domain, path }) => {
+  await jarReady
+  return jar.remove(name, domain, path)
+})
+
+/* -------------------------------------------------------------- proxy & TLS */
+
+/**
+ * A tunnel through an HTTP proxy.
+ *
+ * Node has no proxy support of its own, and the usual answer — swap in a
+ * third-party agent — would mean giving up the socket events the waterfall is
+ * built from. So the tunnel is opened by hand: CONNECT for https, which is
+ * what a proxy expects for a connection it must not read, and an absolute-URL
+ * request for plain http, which is what a proxy expects for one it may.
+ */
+function proxyTunnel(proxy, target) {
+  return new Promise((resolve, reject) => {
+    let via
+    try {
+      via = new URL(proxy)
+    } catch {
+      reject(new Error(`${proxy} is not a proxy URL Prism can read.`))
+      return
+    }
+
+    const headers = { Host: `${target.hostname}:${port(target)}` }
+    if (via.username) {
+      const pair = `${decodeURIComponent(via.username)}:${decodeURIComponent(via.password || '')}`
+      headers['Proxy-Authorization'] = `Basic ${Buffer.from(pair).toString('base64')}`
+    }
+
+    const call = http.request({
+      host: via.hostname,
+      port: Number(via.port) || 8080,
+      method: 'CONNECT',
+      path: `${target.hostname}:${port(target)}`,
+      headers
+    })
+
+    call.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy()
+        // The proxy's own refusal, said plainly: a 407 here is a password
+        // problem and nothing to do with the server being tested.
+        reject(new Error(`The proxy refused the tunnel with ${res.statusCode} ${res.statusMessage || ''}`.trim()))
+        return
+      }
+      resolve(socket)
+    })
+    call.on('error', (err) => reject(new Error(`Cannot reach the proxy: ${err.message}`)))
+    call.end()
+  })
+}
+
+const port = (url) => Number(url.port) || (url.protocol === 'https:' ? 443 : 80)
+
+/**
+ * A client certificate, read from disk at send time.
+ *
+ * Read each time rather than cached: a certificate that has been rotated
+ * should take effect on the next send, not the next restart. The passphrase
+ * is passed through and never written anywhere.
+ */
+function clientIdentity(spec) {
+  const out = {}
+  const load = (path) => {
+    if (!path) return undefined
+    try {
+      return readFileSync(path)
+    } catch (err) {
+      throw new Error(`Cannot read ${path} — ${err.message}`)
+    }
+  }
+
+  if (spec.pfxPath) out.pfx = load(spec.pfxPath)
+  if (spec.certPath) out.cert = load(spec.certPath)
+  if (spec.keyPath) out.key = load(spec.keyPath)
+  if (spec.caPath) out.ca = load(spec.caPath)
+  if (spec.passphrase) out.passphrase = spec.passphrase
+  return out
+}
 
 /* --------------------------------------------------------------------- http */
 
@@ -178,16 +368,65 @@ function request(spec, redirectsLeft) {
     const mark = () => Date.now() - t.start
     const driver = url.protocol === 'https:' ? https : http
 
+    // The jar rides along unless the request already sets a cookie by hand,
+    // in which case the hand-written one wins — it was written deliberately.
+    const headers = { ...(spec.headers || {}) }
+    if (spec.useCookies !== false && jar) {
+      const has = Object.keys(headers).some((k) => k.toLowerCase() === 'cookie')
+      const line = jar.header(url.toString())
+      if (!has && line) headers.Cookie = line
+    }
+
+    let identity
+    try {
+      identity = clientIdentity(spec)
+    } catch (err) {
+      resolve({ error: err.message })
+      return
+    }
+
+    const options = {
+      method: spec.method || 'GET',
+      headers,
+      timeout: spec.timeoutMs || 30000,
+      // Off only for a development server with a self-signed certificate,
+      // and the setting that turns it off says what that costs.
+      rejectUnauthorized: spec.verifyTls !== false,
+      ...identity
+    }
+
+    // Through a proxy, the socket is opened first and handed to the request.
+    // For plain http that is the proxy's own socket with an absolute URL;
+    // for https it is the far end of a CONNECT tunnel, so TLS is negotiated
+    // with the real server and the proxy never sees inside.
+    if (spec.proxy && url.protocol === 'http:') {
+      options.host = null
+      options.socketPath = undefined
+      options.createConnection = () => {
+        const via = new URL(spec.proxy)
+        return sockets.connect({ host: via.hostname, port: Number(via.port) || 8080 })
+      }
+      options.path = url.toString()
+    }
+    if (spec.proxy && url.protocol === 'https:') {
+      options.createConnection = (opts, done) => {
+        const socket = new sockets.Socket()
+        proxyTunnel(spec.proxy, url)
+          .then((tunnel) => {
+            const secure = tls.connect({ socket: tunnel, servername: url.hostname, rejectUnauthorized: spec.verifyTls !== false, ...identity })
+            secure.on('secureConnect', () => {
+              /* the timing hooks below see this too */
+            })
+            done(null, secure)
+          })
+          .catch((err) => done(err))
+        return socket
+      }
+    }
+
     const req = driver.request(
       url,
-      {
-        method: spec.method || 'GET',
-        headers: spec.headers || {},
-        timeout: spec.timeoutMs || 30000,
-        // Off only for a development server with a self-signed certificate,
-        // and the setting that turns it off says what that costs.
-        rejectUnauthorized: spec.verifyTls !== false
-      },
+      options,
       (res) => {
         t.first = mark()
 
@@ -225,7 +464,9 @@ function request(spec, redirectsLeft) {
         })
         res.on('end', () => {
           t.end = mark()
+          const kept = spec.useCookies !== false && jar ? jar.store(res.headers, url.toString()) : 0
           resolve({
+            cookiesStored: kept,
             status: res.statusCode ?? 0,
             statusText: res.statusMessage ?? '',
             headers: flatten(res.headers),
@@ -233,6 +474,7 @@ function request(spec, redirectsLeft) {
             truncated,
             bytes,
             secure: url.protocol === 'https:',
+            sentHeaders: headers,
             timing: {
               dns: t.dns,
               tcp: t.tcp,

@@ -35,7 +35,7 @@ test('every setting is fully described', () => {
     // say what changes rather than repeat the label.
     assert.ok(s.help.length > 25, `${s.id} has help too short to explain anything`)
     assert.ok(s.value !== undefined, `${s.id} has no default`)
-    assert.ok(['choice', 'toggle', 'number'].includes(s.kind), `${s.id} has kind ${s.kind}`)
+    assert.ok(['choice', 'toggle', 'number', 'text', 'secret'].includes(s.kind), `${s.id} has kind ${s.kind}`)
   }
 })
 
@@ -200,5 +200,49 @@ test('no colour is left hardcoded in the markup or the script', () => {
     const text = readFileSync(new URL(file, import.meta.url), 'utf8')
     const found = text.match(/#[0-9a-fA-F]{6}\b/g) ?? []
     assert.deepEqual(found, [], `${file} still has literal colours: ${found.join(', ')}`)
+  }
+})
+
+test('a secret setting starts empty and is never a plain field', () => {
+  const app = readFileSync(new URL('../renderer/app.js', import.meta.url), 'utf8')
+  for (const s of SETTINGS.filter((x) => x.kind === 'secret')) {
+    assert.equal(s.value, '', `${s.id} ships with a value in it`)
+  }
+  assert.match(app, /item\.kind === 'secret' \? 'password' : 'text'/, 'a secret setting must render as a password field')
+})
+
+test('every settings group has an icon and a blurb', () => {
+  // The rail draws ico(SET_ICON[group]), and an unknown group yields an empty
+  // <svg> rather than an error — so a group added without one looks like a
+  // rendering glitch and gets blamed on the stylesheet. Network shipped that way.
+  const app = readFileSync(new URL('../renderer/app.js', import.meta.url), 'utf8')
+
+  const mapFor = (name) => {
+    const at = app.indexOf(`const ${name} = {`)
+    assert.ok(at >= 0, `cannot find ${name}`)
+    const body = app.slice(at, app.indexOf('\n}', at))
+    const out = new Map()
+    for (const line of body.split('\n')) {
+      const cut = line.indexOf(':')
+      if (cut < 0) continue
+      const key = line.slice(0, cut).trim()
+      if (!/^[A-Z][A-Za-z]*$/.test(key)) continue
+      out.set(key, line.slice(cut + 1).trim())
+    }
+    return out
+  }
+
+  const icons = mapFor('SET_ICON')
+  const blurbs = mapFor('SET_BLURB')
+  const DRAWS = ['<path', '<circle', '<rect', '<ellipse', '<line', '<polyline']
+
+  for (const group of [...GROUPS, 'About']) {
+    const icon = icons.get(group)
+    assert.ok(icon, `${group} has no icon, so its row draws an empty svg`)
+    assert.ok(DRAWS.some((tag) => icon.includes(tag)), `${group}'s icon draws nothing: ${icon}`)
+
+    const blurb = blurbs.get(group)
+    assert.ok(blurb, `${group} has no blurb under its heading`)
+    assert.ok(blurb.length > 20, `${group}'s blurb is too short to say anything`)
   }
 })

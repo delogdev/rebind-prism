@@ -21,7 +21,19 @@ contextBridge.exposeInMainWorld('prism', {
   },
   file: {
     open: (filters) => ipcRenderer.invoke('file:open', filters),
-    save: (payload) => ipcRenderer.invoke('file:save', payload)
+    save: (payload) => ipcRenderer.invoke('file:save', payload),
+    saveBytes: (payload) => ipcRenderer.invoke('file:saveBytes', payload)
+  },
+  workspace: {
+    autosave: (text) => ipcRenderer.invoke('workspace:autosave', text),
+    restore: () => ipcRenderer.invoke('workspace:restore'),
+    forget: () => ipcRenderer.invoke('workspace:forget'),
+    saveAs: (payload) => ipcRenderer.invoke('workspace:saveAs', payload)
+  },
+  cookies: {
+    list: () => ipcRenderer.invoke('cookies:list'),
+    clear: () => ipcRenderer.invoke('cookies:clear'),
+    remove: (which) => ipcRenderer.invoke('cookies:remove', which)
   },
   http: {
     send: (spec) => ipcRenderer.invoke('http:send', spec)

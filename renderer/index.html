@@ -32,6 +32,7 @@
 
       <div class="bar-id">
         <b>Prism</b>
+        <span class="save-state" id="saveState" title="Everything saved"></span>
         <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
       </div>
 
@@ -91,6 +92,10 @@
           <button class="mini-btn" id="newCollectionBtn" type="button" title="New collection" aria-label="New collection">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
           </button>
+        </div>
+        <div class="tree-filter">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+          <input id="treeFilter" type="search" placeholder="Filter requests" aria-label="Filter requests" spellcheck="false" />
         </div>
         <div class="tree-body" id="treeBody"></div>
         <div class="tree-bottom">
@@ -210,6 +215,9 @@
                 </button>
                 <div class="resp-stats" id="respStats"></div>
                 <span class="pane-gap"></span>
+                <button class="pane-icon" id="saveBody" type="button" title="Save the response body to a file" aria-label="Save the response body">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4-4m4 4 4-4" /><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" /></svg>
+                </button>
                 <button class="pane-icon" id="copyBody" type="button" title="Copy the response body" aria-label="Copy the response body">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
                 </button>
@@ -224,6 +232,14 @@
         </div>
       </aside>
     </main>
+
+    <div class="dropzone" id="dropzone" hidden aria-hidden="true">
+      <div class="dropzone-card">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L8 8m4-4 4 4" /><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></svg>
+        <b>Drop to import</b>
+        <span>Rebind, Postman, OpenAPI or a Prism workspace</span>
+      </div>
+    </div>
 
     <div class="veil" id="veil" hidden></div>
     <div class="notes" id="notes" aria-live="polite"></div>

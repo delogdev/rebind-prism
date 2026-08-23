@@ -14,7 +14,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-const CSS = readFileSync(new URL('../renderer/styles.css', import.meta.url), 'utf8')
+// Carriage returns are stripped on the way in. Git rewrites this file to CRLF
+// on checkout under Windows, and a rule that slices the file at a newline
+// marker then silently matches nothing and passes without checking anything.
+const CSS = readFileSync(new URL('../renderer/styles.css', import.meta.url), 'utf8').split(String.fromCharCode(13)).join('')
 
 /* ------------------------------------------------------------- utilities */
 
@@ -195,7 +198,11 @@ test('interactive controls are big enough to hit', () => {
 test('every colour in the body comes from a token', () => {
   // The rule that keeps the light theme honest. Anything literal below the
   // token blocks is a value that cannot change with the theme.
-  const body = CSS.slice(CSS.indexOf('* {\n  box-sizing'))
+  const at = CSS.indexOf('* {\n  box-sizing')
+  // Without this the slice below silently becomes nothing, and every rule
+  // built on it passes for the wrong reason.
+  assert.ok(at > 0, 'cannot find the start of the body — this rule would check nothing')
+  const body = CSS.slice(at)
   const literals = [
     ...body.matchAll(/#[0-9a-fA-F]{3,8}\b/g),
     // rgb() with real channel numbers, as opposed to rgb(var(--accent) / x)
@@ -222,7 +229,9 @@ test('focus is always visible', () => {
     '.addr-url:focus': '.addr:focus-within',
     '.editor textarea:focus': '.editor',
     '.pal input:focus': '.pal',
-    '.bench-grip:focus-visible': '.bench-grip:focus-visible span'
+    '.bench-grip:focus-visible': '.bench-grip:focus-visible span',
+    '.tree-filter input:focus': '.tree-filter:focus-within',
+    '.find-field:focus': '.find-bar-row:focus-within'
   }
 
   for (const m of CSS.matchAll(/([^\n{}]+)\{([^}]*outline:\s*(?:none|0)\b[^}]*)\}/g)) {
@@ -300,4 +309,64 @@ test('every class the app applies is styled somewhere', () => {
     .sort()
 
   assert.deepEqual(missing, [], `applied but never styled: ${missing.join(', ')}`)
+})
+
+test('every var() names a token that exists', () => {
+  // A var() pointing at nothing is not an error in CSS — the declaration is
+  // simply dropped, so a border vanishes or a colour falls back to inherited
+  // and the page still renders. Four dead references shipped before this rule
+  // existed.
+  const defined = new Set()
+  for (const m of CSS.matchAll(/^\s*(--[\w-]+)\s*:/gm)) defined.add(m[1])
+  // A few are set from the renderer as an inline style — the line number on a
+  // source row is one — so the stylesheet alone is not the whole picture.
+  const FROM_JS = readFileSync(new URL('../renderer/app.js', import.meta.url), 'utf8')
+  for (const m of FROM_JS.matchAll(/(--[\w-]+)\s*:/g)) defined.add(m[1])
+
+  const used = new Set()
+  for (const m of CSS.matchAll(/var\(\s*(--[\w-]+)/g)) used.add(m[1])
+
+  const dangling = [...used].filter((name) => !defined.has(name))
+  assert.deepEqual(dangling, [], `var() with no token behind it: ${dangling.join(', ')}`)
+})
+
+test('every theme state tells the browser which one it is', () => {
+  /**
+   * `color-scheme` is the only thing native controls listen to.
+   *
+   * A <select>'s open list, the scrollbars and the text caret are drawn by the
+   * browser, not by this stylesheet, and they take their colours from this
+   * property alone. The dark theme shipped without it and opened a white
+   * dropdown over a black app — the tokens had no say in it.
+   */
+  const block = (selector) => {
+    const at = CSS.indexOf(selector)
+    assert.ok(at >= 0, `cannot find ${selector}`)
+    return CSS.slice(at, CSS.indexOf('\n}', at))
+  }
+
+  const states = [
+    // The bare :root carries the dark palette, so it declares dark.
+    [':root {', 'dark'],
+    // Explicit choices, which must win in both directions.
+    [":root[data-theme='dark'] {", 'dark'],
+    [":root[data-theme='light'] {", 'light'],
+    // And the system-light case, where no attribute is stamped at all.
+    [":root:not([data-theme='dark']) {", 'light']
+  ]
+
+  for (const [selector, want] of states) {
+    const text = block(selector)
+    const found = /color-scheme:\s*(\w+)/.exec(text)
+    assert.ok(found, `${selector} never says which color-scheme it is`)
+    assert.equal(found[1], want, `${selector} declares color-scheme: ${found[1]}`)
+  }
+})
+
+test('no rule targets a data-theme the app never sets', () => {
+  // themeAttribute() returns 'dark', 'light' or nothing, so a :root rule for
+  // any other value matches nothing and quietly does nothing — which is how
+  // half the color-scheme handling went missing.
+  const roots = [...CSS.matchAll(/:root\[data-theme='([^']+)'\]/g)].map((m) => m[1])
+  assert.deepEqual([...new Set(roots)].sort(), ['dark', 'light'])
 })

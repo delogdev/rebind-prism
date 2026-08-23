@@ -20,6 +20,14 @@
    ========================================================================== */
 
 :root {
+  /* Native controls follow this, and nothing else.
+
+     A <select>'s open list, the scrollbars and the caret are drawn by the
+     browser, not by this stylesheet — they take their colours from
+     `color-scheme` alone. Without it here the dark app opened a white dropdown,
+     because the default is light and the tokens below have no say in it. */
+  color-scheme: dark;
+
   /* True black. On an OLED panel an unlit pixel draws no power and has no
      glow, so the plane — much the largest area — is #000 rather than a very
      dark grey pretending to be one. The panels lift off it from there. */
@@ -111,13 +119,10 @@
 
    Three states, as the platform defines them: no attribute means follow the
    system, and an explicit choice wins over it in both directions. */
-:root[data-theme='light'],
-:root[data-theme='system'] {
-  color-scheme: light;
-}
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
+    color-scheme: light;
     --void: #eef1f6;
     --s0: #f6f8fb;
     --s1: #ffffff;
@@ -172,7 +177,15 @@
   }
 }
 
+/* An explicit dark choice, for when the system is light. The palette is
+   already the bare :root above; this exists so `color-scheme` survives the
+   media query, which would otherwise hand the native controls to light. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 :root[data-theme='light'] {
+  color-scheme: light;
   --void: #eef1f6;
   --s0: #f6f8fb;
   --s1: #ffffff;
@@ -267,7 +280,7 @@ textarea {
 }
 
 ::selection {
-  background: rgb(124 108 255 / 0.35);
+  background: color-mix(in srgb, var(--indigo) 35%, transparent);
 }
 
 :focus-visible {
@@ -606,7 +619,7 @@ textarea {
 .mini-btn.danger:hover {
   background: var(--fail-bg);
   color: var(--fail);
-  border-color: rgb(251 113 133 / 0.35);
+  border-color: color-mix(in srgb, var(--fail) 35%, transparent);
 }
 
 .tree-body {
@@ -799,7 +812,7 @@ textarea {
 
 .row-rename:focus {
   outline: none;
-  box-shadow: 0 0 0 2px rgb(59 232 255 / 0.18);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cyan) 18%, transparent);
 }
 
 .row-more {
@@ -1175,17 +1188,17 @@ textarea {
 }
 
 .port.needs {
-  border: 1px solid rgb(59 232 255 / 0.35);
+  border: 1px solid color-mix(in srgb, var(--cyan) 35%, transparent);
   color: var(--cyan);
 }
 
 .port.needs.unmet {
-  border-color: rgb(251 113 133 / 0.5);
+  border-color: color-mix(in srgb, var(--fail) 50%, transparent);
   color: var(--fail);
 }
 
 .port.gives {
-  background: rgb(255 107 214 / 0.14);
+  background: color-mix(in srgb, var(--magenta) 14%, transparent);
   color: var(--magenta);
 }
 
@@ -1248,7 +1261,7 @@ textarea {
   color: var(--fail);
 }
 .code.info {
-  background: rgb(59 232 255 / 0.12);
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
   color: var(--cyan);
 }
 
@@ -1343,13 +1356,13 @@ textarea {
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgb(251 113 133 / 0.5);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--fail) 50%, transparent);
   }
   70% {
-    box-shadow: 0 0 0 7px rgb(251 113 133 / 0);
+    box-shadow: 0 0 0 7px transparent;
   }
   100% {
-    box-shadow: 0 0 0 0 rgb(251 113 133 / 0);
+    box-shadow: 0 0 0 0 transparent;
   }
 }
 
@@ -1421,14 +1434,14 @@ textarea {
   padding: 9px;
   border: 0;
   border-top: 1px solid var(--edge);
-  background: rgb(124 108 255 / 0.16);
+  background: color-mix(in srgb, var(--indigo) 16%, transparent);
   color: var(--sx-tint);
   font-size: 11px;
   font-weight: 620;
 }
 
 .intake-all:hover {
-  background: rgb(124 108 255 / 0.26);
+  background: color-mix(in srgb, var(--indigo) 26%, transparent);
 }
 
 /* ============================================================== workbench */
@@ -1505,7 +1518,7 @@ textarea {
 
 .addr:focus-within {
   border-color: var(--cyan);
-  box-shadow: 0 0 0 3px rgb(59 232 255 / 0.13);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cyan) 13%, transparent);
 }
 
 .addr-verb {
@@ -2054,8 +2067,8 @@ textarea {
 }
 
 .give {
-  border-color: rgb(255 107 214 / 0.22);
-  background: rgb(255 107 214 / 0.05);
+  border-color: color-mix(in srgb, var(--magenta) 22%, transparent);
+  background: color-mix(in srgb, var(--magenta) 5%, transparent);
 }
 
 .assert select,
@@ -2559,12 +2572,12 @@ pre.src .ln::before {
   filter: brightness(1.04);
 }
 .btn.bad {
-  border-color: rgb(251 113 133 / 0.4);
+  border-color: color-mix(in srgb, var(--fail) 40%, transparent);
   background: var(--fail-bg);
   color: var(--fail);
 }
 .btn.bad:hover {
-  background: rgb(251 113 133 / 0.22);
+  background: color-mix(in srgb, var(--fail) 22%, transparent);
 }
 .btn.plain {
   background: transparent;
@@ -2679,47 +2692,10 @@ pre.src .ln::before {
   line-height: 1.65;
 }
 
-.envs {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 15px;
-  min-height: 320px;
-}
 
-.envlist {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 
-.envopt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-2);
-  font-size: 11.5px;
-  text-align: left;
-}
 
-.envopt:hover {
-  background: var(--s2);
-}
-.envopt.on {
-  background: var(--sel-soft);
-  border-color: var(--edge-3);
-  color: var(--ink);
-}
 
-.varline {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 0;
-}
 
 .vname {
   flex: 0 1 170px;
@@ -2765,7 +2741,7 @@ pre.src .ln::before {
 
 .lockbtn.on {
   color: var(--hold);
-  border-color: rgb(251 191 36 / 0.4);
+  border-color: color-mix(in srgb, var(--hold) 40%, transparent);
   background: var(--hold-bg);
 }
 
@@ -3027,7 +3003,7 @@ pre.src .ln::before {
 /* A safety default that has been turned off says so in the margin rather than
    sitting quietly among the others. */
 .prefrow.alert {
-  border-color: rgb(251 191 36 / 0.4);
+  border-color: color-mix(in srgb, var(--hold) 40%, transparent);
   background: var(--hold-bg);
 }
 
@@ -3129,7 +3105,7 @@ pre.src .ln::before {
 }
 
 .switch.warn {
-  border-color: rgb(251 191 36 / 0.5);
+  border-color: color-mix(in srgb, var(--hold) 50%, transparent);
 }
 .switch.warn i {
   background: var(--hold);
@@ -3241,7 +3217,8 @@ pre.src .ln::before {
 
 .page-head {
   flex: none;
-  padding: 20px 26px 14px;
+  /* Clears the close button, which floats over this corner. */
+  padding: 20px 58px 14px 26px;
   border-bottom: 1px solid var(--edge);
 }
 
@@ -3560,7 +3537,7 @@ pre.src .ln::before {
   margin-top: 14px;
   padding: 11px 12px;
   border-radius: var(--r3);
-  border: 1px solid rgb(251 191 36 / 0.35);
+  border: 1px solid color-mix(in srgb, var(--hold) 35%, transparent);
   background: var(--hold-bg);
 }
 
@@ -4007,4 +3984,1101 @@ pre.src .ln::before {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ========================================= persistence, data, find, drift */
+
+.save-state {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--rf);
+  background: transparent;
+  border: 1px solid var(--edge-3);
+  flex: none;
+  transition: background var(--t) var(--ease), border-color var(--t) var(--ease);
+}
+
+/* Filled while there is something not yet written. Deliberately quiet — it is
+   reassurance, not an alert. */
+.save-state.dirty {
+  background: var(--hold);
+  border-color: var(--hold);
+}
+
+.tree-filter {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  margin: 0 10px 8px;
+  padding: 0 8px;
+  height: 28px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r1);
+  background: var(--s0);
+  color: var(--ink-4);
+}
+
+.tree-filter:focus-within {
+  border-color: var(--cyan);
+}
+
+.tree-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.tree-filter input:focus {
+  outline: none;
+}
+
+.tree-filter input::placeholder {
+  color: var(--ink-4);
+}
+
+.find-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding: 0 9px;
+  height: 28px;
+  border: 1px solid var(--edge);
+  border-radius: var(--r1);
+  background: var(--s1);
+}
+
+.find-bar-row:focus-within {
+  border-color: var(--cyan);
+}
+
+.find-icon {
+  display: grid;
+  place-items: center;
+  color: var(--ink-4);
+}
+
+.find-field {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11.5px;
+}
+
+.find-field:focus {
+  outline: none;
+}
+
+/* The real line number even when the view is filtered, so a match still tells
+   you where in the body it lives. */
+pre.src .ln.hit::before {
+  content: var(--n);
+}
+
+pre.src mark {
+  background: color-mix(in srgb, var(--hold) 32%, transparent);
+  color: var(--ink);
+  border-radius: 2px;
+}
+
+.baseline-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  background: var(--s1);
+  margin-bottom: 11px;
+}
+
+.dtable {
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  overflow: auto;
+  max-height: 300px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.drow {
+  display: flex;
+  border-bottom: 1px solid var(--edge);
+}
+
+.drow:last-child {
+  border-bottom: 0;
+}
+
+.drow.head {
+  position: sticky;
+  top: 0;
+  background: var(--s2);
+  font-weight: 650;
+  color: var(--ink-3);
+}
+
+.drow.more {
+  padding: 6px 9px;
+  color: var(--ink-4);
+  font-family: var(--font);
+}
+
+.dcell {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 5px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--edge);
+}
+
+.dcell:last-child {
+  border-right: 0;
+}
+
+.dcell.n {
+  flex: 0 0 34px;
+  color: var(--ink-4);
+  text-align: right;
+}
+
+/* A column the request actually spends is worth telling apart from one that
+   is along for the ride. */
+.drow.head .dcell.used {
+  color: var(--cyan);
+}
+
+/* ---------------------------------------------------------------- dropzone
+   Shown only while a file is over the window. Pointer-events off, or the zone
+   itself would swallow the drop it exists to advertise. */
+.dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--s0) 72%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+
+.dropzone-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 30px 44px;
+  color: var(--beam);
+  text-align: center;
+  background: var(--s1);
+  border: 1.5px dashed var(--beam);
+  border-radius: 14px;
+  box-shadow: var(--drop-lg);
+}
+
+.dropzone-card b {
+  font-size: 15px;
+  font-weight: 620;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.dropzone-card span {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+/* -------------------------------------------------------------- dataset drop */
+.dsdrop {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 26px 20px;
+  margin-top: 12px;
+  border: 1.5px dashed var(--edge-2);
+  border-radius: 12px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.dsdrop.over {
+  background: color-mix(in srgb, var(--beam) 8%, transparent);
+  border-color: var(--beam);
+}
+
+.dsdrop-ico {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.dsdrop b {
+  font-size: 13px;
+  font-weight: 580;
+  color: var(--ink-2);
+}
+
+.dsdrop-or {
+  font-size: 11px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+/* ========================================================== environments
+
+   The rail lists environments, so it needs a way to add one; Settings and
+   Help have fixed sections and never show this. */
+.nav-add {
+  margin-top: 6px;
+}
+
+.nav-add,
+.page-nav .nav-add {
+  color: var(--ink-3);
+  border: 1px dashed var(--edge-2);
+  background: none;
+}
+
+.page-nav .nav-add:hover {
+  color: var(--ink);
+  border-color: var(--edge-3);
+  background: var(--s2);
+}
+
+/* ------------------------------------------------------------ the head */
+.envhead {
+  display: grid;
+  gap: 6px;
+}
+
+.envhead-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The name is the heading and the field for it, so it has to read as a
+   heading until someone means to change it. */
+.envtitle {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  margin-left: -9px;
+  font-size: 19px;
+  font-weight: 640;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.envtitle:hover {
+  border-color: var(--edge);
+  background: var(--s2);
+}
+
+.envtitle:focus {
+  outline: none;
+  border-color: var(--cyan);
+  background: var(--s0);
+}
+
+.inuse {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--pass);
+  background: var(--pass-bg);
+  border: 1px solid color-mix(in srgb, var(--pass) 30%, transparent);
+  border-radius: 999px;
+}
+
+.envhead-sub {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* ----------------------------------------------------------- the panel */
+.envpanel {
+  display: grid;
+  gap: 14px;
+}
+
+.envwarn {
+  display: flex;
+  gap: 9px;
+  padding: 11px 13px;
+  color: var(--hold);
+  background: var(--hold-bg);
+  border: 1px solid color-mix(in srgb, var(--hold) 34%, transparent);
+  border-radius: 10px;
+}
+
+.envwarn-ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  height: 17px;
+}
+
+.envwarn p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* The count strip. One line that says how this environment lines up with
+   the requests that spend it. */
+.envchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.envchip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 10px 5px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--s2);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+}
+
+.envchip b {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 620;
+  color: var(--ink);
+}
+
+.envchip.lock {
+  color: var(--ink-2);
+  border-color: color-mix(in srgb, var(--cyan) 26%, transparent);
+}
+
+.envchip.lock b {
+  color: var(--cyan);
+}
+
+.envchip.bad {
+  background: var(--fail-bg);
+  border-color: color-mix(in srgb, var(--fail) 32%, transparent);
+}
+
+.envchip.bad b {
+  color: var(--fail);
+}
+
+.envchip.warn {
+  background: var(--hold-bg);
+  border-color: color-mix(in srgb, var(--hold) 32%, transparent);
+}
+
+.envchip.warn b {
+  color: var(--hold);
+}
+
+.envchip.quiet {
+  color: var(--ink-3);
+  background: none;
+}
+
+.envchip.quiet b {
+  color: var(--ink-3);
+}
+
+/* A nudge, not a block: the value is already typed and the fix is one press. */
+.envnudge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  background: var(--hold-bg);
+  border: 1px solid color-mix(in srgb, var(--hold) 28%, transparent);
+  border-radius: 10px;
+}
+
+.envnudge p {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.envnudge code,
+.envfoot code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--indigo);
+}
+
+/* ---------------------------------------------------------- what is missing */
+.envmissing {
+  display: grid;
+  gap: 4px;
+}
+
+.missrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--fail);
+  border-radius: 8px;
+}
+
+.missrow code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fail);
+}
+
+.missby {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------- the variables */
+.varlbl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.varlbl .varfind {
+  flex: 0 0 172px;
+  height: 26px;
+  margin-bottom: 0;
+}
+
+.vtable {
+  display: grid;
+  gap: 3px;
+}
+
+.vhead,
+.vrow {
+  display: grid;
+  grid-template-columns: minmax(120px, 210px) minmax(0, 1fr) 116px 58px;
+  gap: 8px;
+  align-items: center;
+}
+
+.vhead {
+  padding: 0 2px 2px;
+  font-size: 10px;
+  font-weight: 620;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.vhead-r {
+  text-align: right;
+}
+
+/* A variable nothing refers to is still a variable — dimmed, not hidden. */
+.vrow.idle .vname {
+  color: var(--ink-3);
+}
+
+.vused {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vused.none {
+  color: var(--ink-4);
+  font-style: italic;
+}
+
+.vacts {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.vrow .x-btn {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------- pasting */
+.envacts {
+  display: flex;
+  gap: 8px;
+}
+
+.pastebox {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+}
+
+.pastearea {
+  width: 100%;
+  padding: 9px 11px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  resize: vertical;
+  background: var(--s0);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+}
+
+.pastearea:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+.pastenote {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.pasteskip {
+  color: var(--hold);
+}
+
+.envfoot {
+  padding-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-3);
+  border-top: 1px solid var(--edge);
+}
+
+/* A stage label in the run sheet. Only drawn when a flow actually has stages —
+   a straight chain looks exactly as it always did. */
+.stage-lbl {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 2px 4px;
+  font-size: 10px;
+  font-weight: 620;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.stage-lbl:first-child {
+  padding-top: 0;
+}
+
+.stage-lbl em {
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------------ paste a cURL */
+.curlbox {
+  display: grid;
+  gap: 12px;
+}
+
+.curlout {
+  display: grid;
+  gap: 10px;
+  min-height: 92px;
+}
+
+.curlhead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+}
+
+.curlurl {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curlfacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* A response line you can act on. It has to look pressable without turning
+   the body into a wall of buttons, so the affordance only appears on hover. */
+pre.src.live .ln.act {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+pre.src.live .ln.act:hover,
+pre.src.live .ln.act:focus-visible {
+  background: color-mix(in srgb, var(--cyan) 12%, transparent);
+  box-shadow: inset 2px 0 0 var(--cyan);
+}
+
+.stat.quiet {
+  color: var(--ink-4);
+}
+
+/* A path or a passphrase in Settings. Wider than the number field, because a
+   certificate path is long and a truncated one cannot be checked by eye. */
+.preftext {
+  width: 240px;
+  height: 28px;
+  padding: 0 9px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink);
+  background: var(--s0);
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+}
+
+.preftext:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+/* ---------------------------------------------------------------- oauth */
+.oauth {
+  display: grid;
+  gap: 9px;
+}
+
+/* What is held right now, and how long it has left. The state is the point:
+   an expired token looks identical to a working one until something fails. */
+.oauth-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 4px;
+  padding: 10px 11px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+}
+
+.oauth-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ink-4);
+}
+
+.oauth-dot.ok {
+  background: var(--pass);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pass) 18%, transparent);
+}
+
+.oauth-dot.warn {
+  background: var(--hold);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hold) 18%, transparent);
+}
+
+.oauth-state {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------- inherited rows */
+.levelbox {
+  display: grid;
+  gap: 4px;
+}
+
+/* An inherited header is shown, not offered for editing: changing it here
+   would either fork it silently or change every other request without saying. */
+.kvrow.given {
+  display: grid;
+  grid-template-columns: 92px minmax(90px, 170px) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 0;
+  opacity: 0.85;
+}
+
+.given-src {
+  overflow: hidden;
+  padding: 2px 7px;
+  font-size: 10px;
+  color: var(--ink-3);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--s2);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+}
+
+.kvrow.given .cell {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kvrow.given .cell.k {
+  color: var(--indigo);
+}
+
+/* --------------------------------------------------------------- graphql */
+.gql {
+  display: grid;
+  gap: 2px;
+}
+
+.gqlq,
+.gqlv {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink);
+  resize: vertical;
+  background: var(--s0);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+}
+
+.gqlq:focus,
+.gqlv:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+
+.schemabox {
+  display: grid;
+  gap: 12px;
+}
+
+.fieldlist {
+  display: grid;
+  gap: 3px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.fieldrow-pick {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) auto minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 11px;
+  text-align: left;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.fieldrow-pick:hover {
+  border-color: var(--edge-3);
+  background: var(--s2);
+}
+
+.fieldrow-pick b {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.ftype {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--cyan);
+}
+
+.fargs {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fdesc {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------- trends & flakes */
+.trend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 11px;
+}
+
+.spark svg {
+  display: block;
+}
+
+.spark .fill {
+  fill: color-mix(in srgb, var(--cyan) 12%, transparent);
+  stroke: none;
+}
+
+.spark .line {
+  fill: none;
+  stroke: var(--cyan);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+
+.spark circle.bad {
+  fill: var(--fail);
+}
+
+.trendstats {
+  display: flex;
+  gap: 16px;
+}
+
+.tstat {
+  display: grid;
+  gap: 1px;
+}
+
+.tstat b {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.tstat span {
+  font-size: 10px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tstat.bad b {
+  color: var(--fail);
+}
+
+.verdict {
+  padding: 4px 10px 5px;
+  font-size: 11.5px;
+  border-radius: 999px;
+}
+
+.verdict.bad {
+  color: var(--fail);
+  background: var(--fail-bg);
+}
+
+.verdict.ok {
+  color: var(--pass);
+  background: var(--pass-bg);
+}
+
+.flakyrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  text-align: left;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--hold);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.flakyrow:hover {
+  background: var(--s2);
+}
+
+.flakyrate {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 620;
+  color: var(--hold);
+}
+
+.flakyrow b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.flakyrow span {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* ------------------------------------------------------- graphql errors */
+.gqlerrs {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.gqlerr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 11px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--fail);
+  border-radius: 8px;
+}
+
+.gqlerr b {
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--ink);
+}
+
+.gqlerr .p {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--indigo);
+}
+
+.ln-no {
+  font-size: 10.5px;
+  color: var(--ink-4);
+}
+
+/* ------------------------------------------------ comparing environments */
+.cmp {
+  display: grid;
+  gap: 4px;
+}
+
+.cmp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cmp-pick {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+}
+
+.cmp-vs {
+  font-size: 11px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.cmprow {
+  display: grid;
+  grid-template-columns: minmax(90px, 170px) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 10px;
+  background: var(--s1);
+  border: 1px solid var(--edge);
+  border-left: 2px solid var(--edge-2);
+  border-radius: 8px;
+}
+
+.cmprow.only-a {
+  border-left-color: var(--cyan);
+}
+
+.cmprow.only-b {
+  border-left-color: var(--magenta);
+}
+
+.cmprow.diff {
+  border-left-color: var(--hold);
+}
+
+.cmprow code {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--indigo);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmp-val {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmp-val.none {
+  color: var(--ink-4);
+  font-style: italic;
 }
