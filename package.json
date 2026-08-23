@@ -1,0 +1,80 @@
+{
+  "name": "rebind-prism",
+  "productName": "Rebind Prism",
+  "version": "0.1.0",
+  "description": "A node-graph API testing workspace. Imports Rebind recordings and Postman collections.",
+  "keywords": [
+    "api",
+    "api-testing",
+    "http-client",
+    "postman",
+    "rest",
+    "electron",
+    "qa",
+    "test-automation"
+  ],
+  "license": "MIT",
+  "author": "Rebind Prism contributors",
+  "homepage": "https://github.com/your-org/rebind-prism#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/rebind-prism.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/rebind-prism/issues"
+  },
+  "type": "module",
+  "main": "main.cjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --devtools",
+    "test": "node --test \"test/*.test.mjs\"",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^38.2.2",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "dev.rebind.prism",
+    "productName": "Rebind Prism",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "lib/**/*",
+      "renderer/**/*",
+      "LICENSE",
+      "README.md"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  }
+}

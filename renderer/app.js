@@ -1,0 +1,2294 @@
+/**
+ * Rebind Prism — the workspace.
+ *
+ * THE IDEA
+ *
+ * A request is rarely interesting on its own. What people test is a sequence —
+ * log in, take the token, fetch the profile, take the id, place an order — and
+ * what breaks is usually the join between two steps rather than either step.
+ * So the middle of the screen is a plane with the requests on it and the
+ * variables drawn travelling between them.
+ *
+ * WHY A NODE IS NOT AN EDITOR
+ *
+ * The node used to open into the whole request form, which made it a different
+ * size at every zoom and unreadable at half of them. A node is now a *label*:
+ * what it calls, what it needs, what it gives, and how it went last time.
+ * Everything editable lives in the workbench on the right. You read the graph
+ * on the plane and you change things in one fixed place.
+ *
+ * THREE LEVELS
+ *
+ * Collection → flow → request, which is what a Postman file and a Rebind
+ * export both actually are. Flattening that lost where a flow came from and
+ * made a re-export produce a file shaped differently from the one opened.
+ */
+import {
+  readCollection,
+  emptyRequest,
+  emptyFlow,
+  emptyCollection,
+  row,
+  uid,
+  shortPath,
+  countRequests
+} from '../lib/collection.js'
+import { compile, buildUrl, variablesUsed } from '../lib/request.js'
+import { runAll, emptyAssertion, SUBJECTS, OPERATORS, OP_LABEL, suggestFor, jsonPath } from '../lib/assert.js'
+import { analyse, bytes as fmtBytes } from '../lib/insights.js'
+import { tree, diff, diffSummary } from '../lib/schema.js'
+import { TARGETS, GROUPS, WHOLE_FLOW, generate, slug } from '../lib/codegen.js'
+import { SETTINGS, GROUPS as SET_GROUPS, load as loadSettings, save as saveSettings, themeAttribute } from '../lib/settings.js'
+import { demoWorkspace } from './demo.js'
+
+/* ============================================================== plumbing */
+
+const $ = (id) => document.getElementById(id)
+
+const el = (tag, attrs = {}, kids = []) => {
+  const n = document.createElement(tag)
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === false || v === null || v === undefined) continue
+    if (k === 'class') n.className = v
+    else if (k === 'text') n.textContent = v
+    else if (k === 'html') n.innerHTML = v
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v)
+    else n.setAttribute(k, v === true ? '' : String(v))
+  }
+  for (const kid of [].concat(kids)) if (kid) n.append(kid)
+  return n
+}
+
+const ico = (d, size = 13, w = 2) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`
+
+const I = {
+  play: '<path d="M7 4v16l13-8z" fill="currentColor" stroke="none"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  bin: '<path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  lock: '<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  flow: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H14a4 4 0 0 1 4 4v5.5"/>'
+}
+
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+
+function toast(kind, text) {
+  const n = el('div', { class: `toast ${kind}` }, [el('i'), el('span', { text })])
+  $('notes').append(n)
+  setTimeout(() => {
+    n.style.opacity = '0'
+    setTimeout(() => n.remove(), 200)
+  }, 3200)
+}
+
+/* ================================================================= state */
+
+const S = {
+  collections: [],
+  recorded: [],
+  environments: [],
+  envId: '',
+  pickedId: '',
+  layout: new Map(),
+  /** Nodes the user has dragged. Auto-stacking leaves these alone. */
+  moved: new Set(),
+  results: new Map(),
+  previous: new Map(),
+  busy: new Set(),
+  history: [],
+  editTab: 'params',
+  respTab: 'brief',
+  view: { x: 90, y: 70, z: 1 },
+  split: 55,
+  prefs: {}
+}
+
+const allFlows = () => S.collections.flatMap((c) => c.flows)
+const allRequests = () => allFlows().flatMap((f) => f.requests)
+const findRequest = (id) => allRequests().find((r) => r.id === id) ?? null
+const flowOf = (id) => allFlows().find((f) => f.requests.some((r) => r.id === id)) ?? null
+const collectionOf = (id) => S.collections.find((c) => c.flows.some((f) => f.requests.some((r) => r.id === id))) ?? null
+const current = () => findRequest(S.pickedId)
+const environment = () => S.environments.find((e) => e.id === S.envId) ?? null
+const envValues = () => environment()?.values ?? {}
+
+function commit(what = 'all') {
+  if (what === 'all' || what === 'tree') paintTree()
+  if (what === 'all' || what === 'plane') paintPlane()
+  if (what === 'all' || what === 'bench') paintBench()
+  if (what === 'all') paintBar()
+  drawBeams()
+}
+
+/* ================================================================= theme */
+
+/**
+ * Puts the chosen theme on the root element.
+ *
+ * Three states, not two. 'system' deliberately sets *no* attribute, which
+ * leaves the `prefers-color-scheme` block in charge and lets the app follow
+ * the machine while it is open. An explicit choice stamps the attribute and
+ * wins over the system in both directions.
+ */
+function applyTheme() {
+  const attr = themeAttribute(S.prefs.theme)
+  if (attr) document.documentElement.setAttribute('data-theme', attr)
+  else document.documentElement.removeAttribute('data-theme')
+}
+
+function setPref(id, value) {
+  S.prefs[id] = value
+  saveSettings(safeStorage(), S.prefs)
+}
+
+/** localStorage throws outright in some contexts rather than returning null. */
+function safeStorage() {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
+/* =================================================================== bar */
+
+function paintBar() {
+  const req = current()
+  const flow = req ? flowOf(req.id) : null
+  const col = req ? collectionOf(req.id) : S.collections[0]
+  const crumbs = $('crumbs')
+  crumbs.replaceChildren()
+  ;[col?.name, flow?.name].filter(Boolean).forEach((bit, i) => {
+    if (i) crumbs.append(el('i', { text: '/' }))
+    crumbs.append(el('span', { text: bit }))
+  })
+
+  const env = environment()
+  $('envLabel').textContent = env ? env.name : 'No environment'
+  $('envDot').className = `env-dot${env ? ' on' : ''}${env && /prod|live|release/i.test(env.name) ? ' risky' : ''}`
+  const theme = $('themeBtn')
+  if (theme) {
+    theme.title = `Theme: ${S.prefs.theme}`
+    theme.dataset.theme = S.prefs.theme
+  }
+  $('runFlowBtn').disabled = !allFlows().some((f) => f.requests.length)
+  $('exportBtn').disabled = !allRequests().length
+}
+
+/* ================================================================== tree */
+
+function paintTree() {
+  const host = $('treeBody')
+  host.replaceChildren()
+
+  if (!S.collections.length) {
+    host.append(el('p', { class: 'tree-nothing', html: 'No collections yet.<br />Import a Rebind recording or a Postman collection.' }))
+    return
+  }
+
+  for (const col of S.collections) {
+    const flows = el('div', { class: 'kids' })
+
+    for (const flow of col.flows) {
+      const reqs = el('div', { class: 'kids' })
+      for (const req of flow.requests) {
+        const res = S.results.get(req.id)
+        const state = S.busy.has(req.id) ? 'busy' : res ? (res.failed ? 'fail' : 'pass') : ''
+        reqs.append(
+          el('div', { class: `req-row${req.id === S.pickedId ? ' on' : ''}`, title: req.url || req.name }, [
+            el('span', { class: `verb ${req.method.toLowerCase()}`, text: req.method }),
+            el('button', {
+              class: 'grow',
+              type: 'button',
+              style: 'border:0;background:none;text-align:left;padding:0;color:inherit;font:inherit',
+              text: req.name || 'Untitled',
+              onclick: () => pick(req.id)
+            }),
+            el('span', { class: `state ${state}` }),
+            el('button', {
+              class: 'rowbtn del',
+              type: 'button',
+              title: 'Delete this request',
+              'aria-label': `Delete request ${req.name}`,
+              html: ico(I.bin, 12, 1.9),
+              onclick: () => askDeleteRequest(req)
+            })
+          ])
+        )
+      }
+
+      flows.append(
+        el('div', { class: `flow${flow.open === false ? ' shut' : ''}` }, [
+          el('div', { class: 'flow-row' }, [
+            el('button', {
+              class: 'twist',
+              type: 'button',
+              'aria-label': flow.open === false ? `Expand ${flow.name}` : `Collapse ${flow.name}`,
+              html: ico(I.down, 11, 2.4),
+              onclick: () => {
+                flow.open = flow.open === false
+                paintTree()
+              }
+            }),
+            el('span', { class: 'glyph', style: 'color:var(--ink-4);display:grid;place-items:center', html: ico(I.flow, 12, 1.8) }),
+            el('span', { class: 'grow', text: flow.name }),
+            el('span', { class: 'count', text: String(flow.requests.length) }),
+            el('button', {
+              class: 'rowbtn',
+              type: 'button',
+              title: 'Add a request',
+              'aria-label': `Add a request to ${flow.name}`,
+              html: ico(I.plus, 12, 2.2),
+              onclick: () => addRequest(flow)
+            }),
+            el('button', {
+              class: 'rowbtn del',
+              type: 'button',
+              title: 'Delete this flow',
+              'aria-label': `Delete flow ${flow.name}`,
+              html: ico(I.bin, 12, 1.9),
+              onclick: () => askDeleteFlow(col, flow)
+            })
+          ]),
+          reqs
+        ])
+      )
+    }
+
+    host.append(
+      el('div', { class: `col${col.open === false ? ' shut' : ''}` }, [
+        el('div', { class: 'col-row' }, [
+          el('button', {
+            class: 'twist',
+            type: 'button',
+            'aria-label': col.open === false ? `Expand ${col.name}` : `Collapse ${col.name}`,
+            html: ico(I.down, 11, 2.4),
+            onclick: () => {
+              col.open = col.open === false
+              paintTree()
+            }
+          }),
+          el('span', { class: 'glyph', style: 'color:var(--ink-4);display:grid;place-items:center', html: ico(I.folder, 13, 1.8) }),
+          el('span', { class: 'grow', text: col.name }),
+          col.source && col.source !== 'canvas' ? el('span', { class: 'tag', text: sourceTag(col.source) }) : null,
+          el('button', {
+            class: 'rowbtn',
+            type: 'button',
+            title: 'Add a flow',
+            'aria-label': `Add a flow to ${col.name}`,
+            html: ico(I.plus, 12, 2.2),
+            onclick: () => addFlow(col)
+          }),
+          el('button', {
+            class: 'rowbtn del',
+            type: 'button',
+            title: 'Delete this collection',
+            'aria-label': `Delete collection ${col.name}`,
+            html: ico(I.bin, 12, 1.9),
+            onclick: () => askDeleteCollection(col)
+          })
+        ]),
+        flows
+      ])
+    )
+  }
+}
+
+const sourceTag = (s) => ({ postman: 'postman', 'rebind-workspace': 'rebind', 'rebind-suite': 'rebind' })[s] ?? s
+
+/* ------------------------------------------------------- add and delete */
+
+function addFlow(col) {
+  const flow = emptyFlow(`Flow ${col.flows.length + 1}`)
+  col.flows.push(flow)
+  commit()
+  toast('ok', `Added ${flow.name}`)
+}
+
+function addRequest(flow) {
+  const req = emptyRequest({ name: 'New request', url: '{{base_url}}/' })
+  flow.requests.push(req)
+  S.pickedId = req.id
+  commit()
+  setTimeout(fit, 20)
+}
+
+function newCollection() {
+  const col = emptyCollection(`Collection ${S.collections.length + 1}`, [emptyFlow('Flow 1')])
+  S.collections.push(col)
+  commit()
+}
+
+/**
+ * Deleting.
+ *
+ * Always confirmed, and always specific about what goes with it — deleting a
+ * flow takes its requests, and a count is the difference between a decision
+ * and a surprise. None of it is undoable, so the dialog is the safety net.
+ */
+function askDeleteRequest(req) {
+  confirmSheet({
+    title: `Delete “${req.name || 'this request'}”?`,
+    blurb: 'The request, its assertions and its captures go with it. Anything downstream that used a variable it captured will say the variable is missing.',
+    danger: 'Delete request',
+    onYes: () => {
+      const flow = flowOf(req.id)
+      if (!flow) return
+      flow.requests = flow.requests.filter((r) => r.id !== req.id)
+      forget(req.id)
+      if (S.pickedId === req.id) S.pickedId = allRequests()[0]?.id ?? ''
+      commit()
+      toast('ok', 'Request deleted')
+    }
+  })
+}
+
+function askDeleteFlow(col, flow) {
+  const n = flow.requests.length
+  confirmSheet({
+    title: `Delete the flow “${flow.name}”?`,
+    blurb: n ? `${n} request${n === 1 ? '' : 's'} inside it will be deleted too.` : 'It has no requests in it.',
+    danger: n ? `Delete flow and ${n} request${n === 1 ? '' : 's'}` : 'Delete flow',
+    onYes: () => {
+      for (const r of flow.requests) forget(r.id)
+      col.flows = col.flows.filter((f) => f.id !== flow.id)
+      if (!findRequest(S.pickedId)) S.pickedId = allRequests()[0]?.id ?? ''
+      commit()
+      toast('ok', `Deleted ${flow.name}`)
+    }
+  })
+}
+
+function askDeleteCollection(col) {
+  const n = col.flows.reduce((sum, f) => sum + f.requests.length, 0)
+  confirmSheet({
+    title: `Delete the collection “${col.name}”?`,
+    blurb: `${col.flows.length} flow${col.flows.length === 1 ? '' : 's'} and ${n} request${n === 1 ? '' : 's'} will be deleted. The file you imported it from is untouched.`,
+    danger: 'Delete collection',
+    onYes: () => {
+      for (const f of col.flows) for (const r of f.requests) forget(r.id)
+      S.collections = S.collections.filter((c) => c.id !== col.id)
+      if (!findRequest(S.pickedId)) S.pickedId = allRequests()[0]?.id ?? ''
+      commit()
+      toast('ok', `Deleted ${col.name}`)
+    }
+  })
+}
+
+/** Everything held against a request id, so nothing is left behind. */
+function forget(id) {
+  S.layout.delete(id)
+  S.moved.delete(id)
+  S.results.delete(id)
+  S.previous.delete(id)
+  S.busy.delete(id)
+  S.history = S.history.filter((h) => h.requestId !== id)
+}
+
+/* ================================================================= plane */
+
+const NODE_W = 268
+const COL_GAP = 360
+// Generous: a node with four ports is a good deal taller than one with none,
+// and nodes that overlap on first open make the graph look broken.
+const ROW_GAP = 208
+
+function place() {
+  let column = 0
+  for (const flow of allFlows()) {
+    flow.requests.forEach((req, i) => {
+      if (!S.layout.has(req.id)) S.layout.set(req.id, { x: 40 + column * COL_GAP, y: 40 + i * ROW_GAP })
+    })
+    if (flow.requests.length) column += 1
+  }
+}
+
+function tidy() {
+  S.layout.clear()
+  S.moved.clear()
+  place()
+  commit('plane')
+  setTimeout(fit, 20)
+}
+
+function paintPlane() {
+  place()
+  const host = $('nodes')
+  host.replaceChildren()
+  applyView()
+  const list = allRequests()
+  $('planeEmpty').hidden = list.length > 0
+  for (const req of list) host.append(nodeFor(req))
+  restack()
+}
+
+/**
+ * Even gaps, measured rather than assumed.
+ *
+ * A node with four ports is half as tall again as one with none, so any fixed
+ * row height either wastes space or overlaps. This reads the heights the
+ * browser actually produced and re-stacks each column with a constant gap
+ * between the boxes — skipping anything the user has dragged, because a node
+ * someone placed by hand must stay where they put it.
+ */
+function restack() {
+  const GAP = 34
+  for (const flow of allFlows()) {
+    let y = null
+    for (const req of flow.requests) {
+      const at = S.layout.get(req.id)
+      const node = document.querySelector(`.node[data-id="${req.id}"]`)
+      if (!at || !node) continue
+      if (S.moved.has(req.id)) {
+        y = null
+        continue
+      }
+      if (y !== null) {
+        at.y = y
+        node.style.top = `${y}px`
+      }
+      y = at.y + node.offsetHeight + GAP
+    }
+  }
+  drawBeams()
+}
+
+/**
+ * One node.
+ *
+ * Fixed width, four bands: what it is, where it goes, what it trades, how it
+ * went. Nothing on it can be edited, which is exactly what lets it stay the
+ * same size and stay readable when the plane is zoomed out.
+ */
+function nodeFor(req) {
+  const at = S.layout.get(req.id)
+  const res = S.results.get(req.id)
+  const verb = req.method.toLowerCase()
+  const known = envValues()
+
+  const node = el('div', {
+    class: `node${req.id === S.pickedId ? ' on' : ''}${S.busy.has(req.id) ? ' busy' : ''}`,
+    style: `left:${at.x}px;top:${at.y}px`,
+    'data-id': req.id,
+    tabindex: '0',
+    role: 'button',
+    'aria-label': `${req.method} ${req.name}`
+  })
+
+  node.append(el('span', { class: `node-line ${verb}` }))
+  node.append(
+    el('div', { class: 'node-top' }, [
+      el('span', { class: `verb ${verb}`, text: req.method }),
+      el('span', { class: 'node-name', text: req.name || 'Untitled' })
+    ])
+  )
+  node.append(el('span', { class: 'node-path', html: pathLabel(req.url) }))
+
+  /* ports — what it needs on the left, what it gives on the right, on the
+     same sides the beams arrive and leave from. */
+  const needs = variablesUsed(req)
+  const gives = (req.captures ?? []).filter((c) => c.name).map((c) => c.name)
+  if ((needs.length || gives.length) && S.prefs.showPorts !== false) {
+    const inCol = el('div', { class: 'port-col' })
+    for (const name of needs.slice(0, 4)) {
+      const from = allRequests().find((r) => (r.captures ?? []).some((c) => c.name === name))
+      const met = Boolean(from) || Object.prototype.hasOwnProperty.call(known, name)
+      inCol.append(
+        el('span', {
+          class: `port needs${met ? '' : ' unmet'}`,
+          title: from ? `captured by ${from.name}` : met ? 'set in the environment' : 'nothing provides this',
+          html: `<span class="port-dot"></span>${esc(name)}`
+        })
+      )
+    }
+    if (needs.length > 4) inCol.append(el('span', { class: 'port needs', text: `+${needs.length - 4} more` }))
+
+    const outCol = el('div', { class: 'port-col out' })
+    for (const name of gives.slice(0, 4)) {
+      outCol.append(el('span', { class: 'port gives', html: `${esc(name)}<span class="port-dot"></span>` }))
+    }
+    if (gives.length > 4) outCol.append(el('span', { class: 'port gives', text: `+${gives.length - 4}` }))
+
+    node.append(el('div', { class: 'ports' }, [inCol, outCol]))
+  }
+
+  const foot = el('div', { class: 'node-foot' })
+  const n = (req.assertions ?? []).length
+  if (res) {
+    foot.append(el('span', { class: `code ${tone(res.status)}`, text: res.error ? 'ERR' : String(res.status) }))
+    if (!res.error) foot.append(el('span', { text: `${res.timing?.total ?? 0}ms` }))
+    if (n) {
+      foot.append(
+        el('span', { class: `checks ${res.failed ? 'fail' : 'pass'}`, text: res.failed ? `${res.failed}/${n} failed` : `${n} passed` })
+      )
+    }
+  } else {
+    foot.append(el('span', { text: n ? `${n} assertion${n === 1 ? '' : 's'}` : 'no assertions' }))
+  }
+  foot.append(el('span', { class: 'spacer' }))
+  foot.append(
+    el('button', {
+      class: 'node-run',
+      type: 'button',
+      title: 'Send this request',
+      'aria-label': `Send ${req.name}`,
+      html: ico(I.play, 10),
+      onclick: (e) => {
+        e.stopPropagation()
+        send(req)
+      }
+    })
+  )
+  node.append(foot)
+
+  node.addEventListener('pointerdown', (e) => drag(e, req, node))
+  node.addEventListener('click', (e) => {
+    if (node.dataset.moved) {
+      delete node.dataset.moved
+      return
+    }
+    if (!e.target.closest('button')) pick(req.id)
+  })
+  node.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      pick(req.id)
+    }
+  })
+  return node
+}
+
+const markVars = (t) => esc(t).replace(/\{\{[\w.-]+\}\}/g, (m) => `<span class="node-var">${m}</span>`)
+
+/**
+ * The endpoint, written so the path is what you read.
+ *
+ * A leading `{{base_url}}` is the same on every node in a collection, so it is
+ * kept — dropping it would be a lie about what gets sent — but dimmed, and the
+ * path after it takes the emphasis and the space.
+ */
+function pathLabel(url) {
+  const text = String(url ?? '')
+  if (!text) return '—'
+  const m = /^(\{\{[\w.-]+\}\})(.*)$/.exec(text)
+  if (m) return `<span class="node-base">${esc(m[1])}</span>${markVars(m[2])}`
+  return markVars(text)
+}
+
+function tone(status) {
+  if (!status || status >= 500) return 'bad'
+  if (status >= 400) return 'warn'
+  if (status >= 300) return 'info'
+  return 'ok'
+}
+
+function word(status) {
+  if (!status) return 'no response'
+  if (status >= 500) return 'server error'
+  if (status >= 400) return 'client error'
+  if (status >= 300) return 'redirect'
+  return 'ok'
+}
+
+/* ------------------------------------------------------------------ beams */
+
+/**
+ * A beam exists where one request captures a value that another one uses.
+ *
+ * Derived, never stored: you make the connection by capturing a value and
+ * spending it, which is the same act as making the test work, so there is no
+ * separate wiring step to fall out of step with reality.
+ */
+function beams() {
+  const out = []
+  const list = allRequests()
+  for (const from of list) {
+    for (const cap of from.captures ?? []) {
+      if (!cap.name) continue
+      for (const to of list) {
+        if (to.id !== from.id && variablesUsed(to).includes(cap.name)) out.push({ from: from.id, to: to.id, name: cap.name })
+      }
+    }
+  }
+  return out
+}
+
+function drawBeams() {
+  const host = $('beams')
+  if (!host) return
+  host.replaceChildren()
+
+  const { x, y, z } = S.view
+  const box = (id) => {
+    const at = S.layout.get(id)
+    if (!at) return null
+    const n = document.querySelector(`.node[data-id="${id}"]`)
+    return { x: at.x * z + x, y: at.y * z + y, w: NODE_W * z, h: (n ? n.offsetHeight : 96) * z }
+  }
+
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+  defs.innerHTML = `
+    <linearGradient id="beamgrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="var(--magenta)"/><stop offset="0.55" stop-color="var(--indigo)"/><stop offset="1" stop-color="var(--cyan)"/>
+    </linearGradient>
+    <marker id="tip" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="var(--cyan)"/>
+    </marker>`
+  host.append(defs)
+
+  for (const beam of beams()) {
+    const a = box(beam.from)
+    const b = box(beam.to)
+    if (!a || !b) continue
+
+    // Leaves the giver's right edge level with its ports and arrives at the
+    // taker's left edge level with its own, so a line lands where the name is.
+    const x1 = a.x + a.w
+    const y1 = a.y + a.h - 46 * z
+    const x2 = b.x
+    const y2 = b.y + Math.min(b.h - 40 * z, 74 * z)
+    const bend = Math.max(44, Math.abs(x2 - x1) * 0.45)
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`)
+    path.setAttribute('fill', 'none')
+    path.setAttribute('stroke', 'url(#beamgrad)')
+    path.setAttribute('stroke-width', '1.5')
+    path.setAttribute('stroke-opacity', '0.8')
+    path.setAttribute('marker-end', 'url(#tip)')
+    host.append(path)
+
+    if (z > 0.55 && S.prefs.beamLabels !== false) {
+      // Three quarters of the way along rather than the middle. One request
+      // often feeds four others, and every label at the midpoint piles up on
+      // top of the source; near the target they spread out with the arrows.
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      t.setAttribute('x', String(x1 + (x2 - x1) * 0.72))
+      t.setAttribute('y', String(y1 + (y2 - y1) * 0.86 - 6))
+      t.setAttribute('text-anchor', 'middle')
+      t.setAttribute('fill', 'var(--sx-tint)')
+      t.setAttribute('font-size', String(9.5 * Math.max(0.85, z)))
+      t.setAttribute('font-family', 'var(--mono)')
+      t.textContent = beam.name
+      host.append(t)
+    }
+  }
+}
+
+/* ---------------------------------------------------- pan, zoom and drag */
+
+function drag(e, req, node) {
+  if (e.button !== 0 || e.target.closest('button')) return
+  e.stopPropagation()
+  const at = S.layout.get(req.id)
+  const from = { x: e.clientX, y: e.clientY }
+  const origin = { ...at }
+  let moved = false
+  node.classList.add('grabbed')
+
+  const move = (ev) => {
+    const dx = (ev.clientX - from.x) / S.view.z
+    const dy = (ev.clientY - from.y) / S.view.z
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true
+    at.x = Math.round(origin.x + dx)
+    at.y = Math.round(origin.y + dy)
+    node.style.left = `${at.x}px`
+    node.style.top = `${at.y}px`
+    drawBeams()
+  }
+  const up = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    node.classList.remove('grabbed')
+    if (moved) {
+      node.dataset.moved = '1'
+      S.moved.add(req.id)
+    }
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+function wirePlane() {
+  const plane = $('plane')
+
+  plane.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.node') || e.target.closest('.plane-tools') || e.target.closest('.intake') || e.target.closest('.legend')) return
+    const from = { x: e.clientX, y: e.clientY }
+    const origin = { ...S.view }
+    plane.classList.add('dragging')
+    const move = (ev) => {
+      S.view.x = origin.x + (ev.clientX - from.x)
+      S.view.y = origin.y + (ev.clientY - from.y)
+      applyView()
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      plane.classList.remove('dragging')
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  })
+
+  plane.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault()
+      const r = plane.getBoundingClientRect()
+      const px = e.clientX - r.left
+      const py = e.clientY - r.top
+      const next = clamp(S.view.z * (e.deltaY > 0 ? 0.92 : 1.08), 0.3, 2)
+      // Around the pointer, so whatever is under the cursor stays under it.
+      S.view.x = px - ((px - S.view.x) / S.view.z) * next
+      S.view.y = py - ((py - S.view.y) / S.view.z) * next
+      S.view.z = next
+      applyView()
+    },
+    { passive: false }
+  )
+
+  $('zoomIn').onclick = () => {
+    S.view.z = clamp(S.view.z * 1.15, 0.3, 2)
+    applyView()
+  }
+  $('zoomOut').onclick = () => {
+    S.view.z = clamp(S.view.z / 1.15, 0.3, 2)
+    applyView()
+  }
+  $('zoomFit').onclick = fit
+  $('tidyBtn').onclick = tidy
+}
+
+function applyView() {
+  const { x, y, z } = S.view
+  $('nodes').style.transform = `translate(${x}px, ${y}px) scale(${z})`
+  $('planeDots').style.backgroundPosition = `${x}px ${y}px`
+  $('planeDots').style.backgroundSize = `${24 * z}px ${24 * z}px`
+  $('zoomPct').textContent = `${Math.round(z * 100)}%`
+  drawBeams()
+}
+
+function fit() {
+  const list = allRequests()
+  if (!list.length) return
+  const r = $('plane').getBoundingClientRect()
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const req of list) {
+    const at = S.layout.get(req.id)
+    const n = document.querySelector(`.node[data-id="${req.id}"]`)
+    const h = n ? n.offsetHeight : 110
+    minX = Math.min(minX, at.x)
+    minY = Math.min(minY, at.y)
+    maxX = Math.max(maxX, at.x + NODE_W)
+    maxY = Math.max(maxY, at.y + h)
+  }
+  const pad = 52
+  const z = clamp(Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY)), 0.3, 1.1)
+  S.view = { z, x: pad - minX * z, y: pad - minY * z }
+  applyView()
+}
+
+function pick(id) {
+  S.pickedId = id
+  S.editTab = 'params'
+  S.respTab = S.results.has(id) ? 'result' : 'brief'
+  commit()
+}
+
+/* ============================================================= workbench */
+
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
+
+const EDIT_TABS = [
+  ['params', 'Params'],
+  ['headers', 'Headers'],
+  ['body', 'Body'],
+  ['auth', 'Auth'],
+  ['tests', 'Tests'],
+  ['chain', 'Chain']
+]
+
+const RESP_TABS = [
+  ['brief', 'Brief'],
+  ['result', 'Result'],
+  ['payload', 'Payload'],
+  ['headers', 'Headers'],
+  ['shape', 'Shape'],
+  ['diff', 'Diff'],
+  ['notes', 'Notes'],
+  ['timing', 'Timing']
+]
+
+function paintBench() {
+  const req = current()
+  $('benchNone').hidden = Boolean(req)
+  $('benchLive').hidden = !req
+  if (!req) return
+
+  const verb = req.method.toLowerCase()
+  $('benchVerb').className = `verb ${verb}`
+  $('benchVerb').textContent = req.method
+  if ($('benchName').value !== (req.name ?? '')) $('benchName').value = req.name ?? ''
+  $('addrVerb').className = `addr-verb ${verb}`
+  $('addrVerbText').textContent = req.method
+  if ($('urlInput').value !== (req.url ?? '')) $('urlInput').value = req.url ?? ''
+  $('methodPick').replaceChildren(...METHODS.map((m) => el('option', { value: m, text: m, selected: m === req.method })))
+
+  const busy = S.busy.has(req.id)
+  $('sendBtn').disabled = busy
+  $('sendLabel').textContent = busy ? 'Sending' : 'Send'
+  paintPreview(req)
+
+  const res = S.results.get(req.id)
+
+  const et = $('editTabs')
+  et.replaceChildren()
+  for (const [id, label] of EDIT_TABS) {
+    const n = countFor(req, id)
+    et.append(
+      el('button', { class: `tab${S.editTab === id ? ' on' : ''}`, type: 'button', role: 'tab', html: `${label}${n ? `<b>${n}</b>` : ''}`, onclick: () => {
+        S.editTab = id
+        paintBench()
+      } })
+    )
+  }
+  $('editBody').replaceChildren(editPanel(req, res))
+
+  const rt = $('respTabs')
+  rt.replaceChildren()
+  for (const [id, label] of RESP_TABS) {
+    let badge = ''
+    if (id === 'notes' && res?.findings?.length) {
+      const bad = res.findings.filter((f) => f.level === 'bad').length
+      badge = bad ? `<b class="bad">${bad}</b>` : `<b>${res.findings.length}</b>`
+    }
+    rt.append(
+      el('button', { class: `tab${S.respTab === id ? ' on' : ''}`, type: 'button', role: 'tab', html: `${label}${badge}`, onclick: () => {
+        S.respTab = id
+        paintBench()
+      } })
+    )
+  }
+  $('respBody').replaceChildren(respPanel(req, res))
+  $('benchSplit').style.gridTemplateRows = `minmax(120px, ${S.split}fr) 7px minmax(110px, ${100 - S.split}fr)`
+}
+
+function paintPreview(req) {
+  $('wirePreview').innerHTML = `<b style="color:var(--ink-4)">${req.method}</b> ${esc(buildUrl(req, envValues())).replace(
+    /\{\{[\w.-]+\}\}/g,
+    (m) => `<span class="v">${m}</span>`
+  )}`
+}
+
+function countFor(req, tab) {
+  const on = (list) => (list ?? []).filter((r) => r.on !== false).length
+  if (tab === 'params') return on(req.query) + on(req.pathParams)
+  if (tab === 'headers') return on(req.headers)
+  if (tab === 'body') return req.bodyKind !== 'none' ? 1 : 0
+  if (tab === 'auth') return req.auth?.kind !== 'none' ? 1 : 0
+  if (tab === 'tests') return (req.assertions ?? []).length
+  if (tab === 'chain') return (req.captures ?? []).length
+  return 0
+}
+
+/** Redraws only what a keystroke changes, so typing does not rebuild the app. */
+function live(req) {
+  paintPreview(req)
+  const path = document.querySelector(`.node[data-id="${req.id}"] .node-path`)
+  if (path) path.innerHTML = pathLabel(req.url)
+}
+
+/* ---------------------------------------------------------- edit panels */
+
+function editPanel(req, res) {
+  switch (S.editTab) {
+    case 'headers':
+      return rowsPanel(req, 'headers', 'Headers', 'X-Tenant', 'northwind')
+    case 'body':
+      return bodyPanel(req)
+    case 'auth':
+      return authPanel(req)
+    case 'tests':
+      return testsPanel(req, res)
+    case 'chain':
+      return chainPanel(req)
+    default: {
+      const box = el('div')
+      box.append(rowsPanel(req, 'query', 'Query parameters', 'search', 'iphone'))
+      box.append(rowsPanel(req, 'pathParams', 'Path parameters', 'userId', '42', 'written in the endpoint as :userId'))
+      return box
+    }
+  }
+}
+
+function rowsPanel(req, key, label, kHint, vHint, hint) {
+  const box = el('div')
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: label }), hint ? el('em', { text: hint }) : null]))
+  const list = (req[key] ??= [])
+
+  for (const r of list) {
+    box.append(
+      el('div', { class: `kvrow${r.on === false ? ' off' : ''}` }, [
+        el('input', { class: 'tick', type: 'checkbox', checked: r.on !== false, 'aria-label': `Send ${r.key || 'this row'}`, onchange: (e) => {
+          r.on = e.target.checked
+          commit('plane')
+          paintBench()
+        } }),
+        el('input', { class: 'cell k', value: r.key, placeholder: kHint, 'aria-label': 'Name', oninput: (e) => {
+          r.key = e.target.value
+          live(req)
+        } }),
+        el('input', { class: 'cell v', value: r.value, placeholder: vHint, 'aria-label': 'Value', oninput: (e) => {
+          r.value = e.target.value
+          live(req)
+        } }),
+        el('button', { class: 'x-btn', type: 'button', 'aria-label': `Remove ${r.key || 'row'}`, html: ico(I.x, 11, 2.3), onclick: () => {
+          req[key] = list.filter((x) => x.id !== r.id)
+          commit()
+        } })
+      ])
+    )
+  }
+
+  box.append(
+    el('button', { class: 'addbtn', type: 'button', html: `${ico(I.plus, 10, 2.4)}<span>Add</span>`, onclick: () => {
+      list.push(row())
+      paintBench()
+    } })
+  )
+  return box
+}
+
+const BODY_KINDS = [
+  ['none', 'None'],
+  ['json', 'JSON'],
+  ['graphql', 'GraphQL'],
+  ['urlencoded', 'Form URL'],
+  ['form', 'Multipart'],
+  ['xml', 'XML'],
+  ['raw', 'Raw']
+]
+
+function bodyPanel(req) {
+  const box = el('div')
+  const chips = el('div', { class: 'chips' })
+  for (const [id, label] of BODY_KINDS) {
+    chips.append(
+      el('button', { class: `chipbtn${req.bodyKind === id ? ' on' : ''}`, type: 'button', text: label, onclick: () => {
+        req.bodyKind = id
+        commit()
+      } })
+    )
+  }
+  box.append(chips)
+
+  if (req.bodyKind === 'none') {
+    box.append(el('p', { class: 'note', text: 'This request sends no body.' }))
+    return box
+  }
+
+  const area = el('textarea', {
+    spellcheck: 'false',
+    placeholder: req.bodyKind === 'urlencoded' ? 'one key=value per line' : '{\n  "email": "{{user_email}}"\n}',
+    oninput: (e) => {
+      req.body = e.target.value
+    }
+  })
+  area.value = req.body ?? ''
+
+  box.append(
+    el('div', { class: 'editor' }, [
+      area,
+      el('div', { class: 'editor-foot' }, [
+        el('span', { text: describeBody(req) }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'tiny', type: 'button', text: 'Format', onclick: () => {
+          try {
+            req.body = JSON.stringify(JSON.parse(req.body ?? ''), null, 2)
+            paintBench()
+          } catch (err) {
+            toast('bad', `Not valid JSON — ${err.message}`)
+          }
+        } })
+      ])
+    ])
+  )
+  return box
+}
+
+function describeBody(req) {
+  const t = req.body ?? ''
+  if (!t) return 'empty'
+  if (req.bodyKind === 'json' || req.bodyKind === 'graphql') {
+    try {
+      JSON.parse(t)
+      return `valid JSON · ${t.length} chars`
+    } catch {
+      return 'not valid JSON yet'
+    }
+  }
+  return `${t.length} chars`
+}
+
+const AUTHS = [
+  ['none', 'No auth', 'sent as it is'],
+  ['bearer', 'Bearer', 'Authorization: Bearer'],
+  ['basic', 'Basic', 'user and password'],
+  ['apiKey', 'API key', 'header or query'],
+  ['oauth2', 'OAuth 2.0', 'a token you hold'],
+  ['jwt', 'JWT', 'signed token as bearer']
+]
+
+function authPanel(req) {
+  const box = el('div')
+  const grid = el('div', { class: 'authgrid' })
+  for (const [id, title, sub] of AUTHS) {
+    grid.append(
+      el('button', { class: `authcard${req.auth?.kind === id ? ' on' : ''}`, type: 'button', onclick: () => {
+        req.auth = { ...(req.auth ?? {}), kind: id }
+        commit()
+      } }, [el('b', { text: title }), el('span', { text: sub })])
+    )
+  }
+  box.append(grid)
+
+  const kind = req.auth?.kind ?? 'none'
+  if (kind === 'none') return box
+
+  const field = (label, prop, ph) =>
+    el('div', { class: 'fieldrow' }, [
+      el('label', { text: label }),
+      el('input', { value: req.auth?.[prop] ?? '', placeholder: ph, oninput: (e) => {
+        req.auth[prop] = e.target.value
+        live(req)
+      } })
+    ])
+
+  if (kind === 'basic') {
+    box.append(field('Username', 'username', '{{user}}'), field('Password', 'password', '{{password}}'))
+  } else if (kind === 'apiKey') {
+    box.append(field('Key name', 'keyName', 'X-Api-Key'), field('Value', 'token', '{{api_key}}'))
+    box.append(
+      el('div', { class: 'fieldrow' }, [
+        el('label', { text: 'Send in' }),
+        el('select', { onchange: (e) => {
+          req.auth.keyIn = e.target.value
+          commit('plane')
+        } }, [
+          el('option', { value: 'header', text: 'Header', selected: req.auth?.keyIn !== 'query' }),
+          el('option', { value: 'query', text: 'Query string', selected: req.auth?.keyIn === 'query' })
+        ])
+      ])
+    )
+  } else {
+    box.append(field('Token', 'token', '{{auth_token}}'))
+  }
+
+  box.append(
+    el('p', { class: 'note', style: 'margin-top:11px', text: 'Write a variable here rather than a value. Exports carry the variable; they never carry the secret.' })
+  )
+  return box
+}
+
+function testsPanel(req, res) {
+  const box = el('div')
+  const byId = new Map((res?.checks ?? []).map((c) => [c.id, c]))
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Assertions' })]))
+
+  for (const a of req.assertions ?? []) {
+    const hit = byId.get(a.id)
+    const ops = OPERATORS[a.subject] ?? ['equals']
+    const needsPath = a.subject === 'json' || a.subject === 'header'
+    const needsValue = !['exists', 'absent', 'isEmpty', 'notEmpty', 'isSuccess'].includes(a.op)
+
+    box.append(
+      el('div', { class: `assert${hit ? (hit.ok ? ' pass' : ' fail') : ''}` }, [
+        el('input', { class: 'tick', type: 'checkbox', checked: a.on !== false, 'aria-label': 'Run this assertion', onchange: (e) => {
+          a.on = e.target.checked
+        } }),
+        el('select', { class: 'subj', 'aria-label': 'Subject', onchange: (e) => {
+          a.subject = e.target.value
+          a.op = (OPERATORS[a.subject] ?? ['equals'])[0]
+          paintBench()
+        } }, SUBJECTS.map((s) => el('option', { value: s.id, text: s.label, selected: s.id === a.subject }))),
+        needsPath
+          ? el('input', { class: 'cell k', value: a.path ?? '', placeholder: a.subject === 'json' ? 'data.id' : 'X-Request-Id', 'aria-label': 'Path', oninput: (e) => {
+              a.path = e.target.value
+            } })
+          : null,
+        el('select', { class: 'op', 'aria-label': 'Operator', onchange: (e) => {
+          a.op = e.target.value
+          paintBench()
+        } }, ops.map((o) => el('option', { value: o, text: OP_LABEL[o] ?? o, selected: o === a.op }))),
+        needsValue
+          ? el('input', { class: 'cell v', value: a.value ?? '', placeholder: '200', 'aria-label': 'Expected', oninput: (e) => {
+              a.value = e.target.value
+            } })
+          : null,
+        hit ? el('span', { class: 'saw', title: hit.detail, text: hit.detail }) : null,
+        el('button', { class: 'x-btn', type: 'button', 'aria-label': 'Remove assertion', html: ico(I.x, 11, 2.3), onclick: () => {
+          req.assertions = req.assertions.filter((x) => x.id !== a.id)
+          commit()
+        } })
+      ])
+    )
+  }
+
+  box.append(
+    el('button', { class: 'addbtn', type: 'button', html: `${ico(I.plus, 10, 2.4)}<span>Add assertion</span>`, onclick: () => {
+      ;(req.assertions ??= []).push(emptyAssertion())
+      commit()
+    } })
+  )
+  return box
+}
+
+function chainPanel(req) {
+  const box = el('div')
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Gives' }), el('em', { text: 'captured here, usable as {{name}} downstream' })]))
+
+  for (const c of req.captures ?? []) {
+    box.append(
+      el('div', { class: 'give' }, [
+        el('input', { class: 'cell k', value: c.name, placeholder: 'auth_token', 'aria-label': 'Variable name', oninput: (e) => {
+          c.name = e.target.value
+          commit('plane')
+        } }),
+        el('span', { class: 'arrow', html: ico(I.chev, 11, 2.4) }),
+        el('select', { 'aria-label': 'From', onchange: (e) => {
+          c.from = e.target.value
+        } }, [
+          el('option', { value: 'body', text: 'Body', selected: c.from !== 'header' }),
+          el('option', { value: 'header', text: 'Header', selected: c.from === 'header' })
+        ]),
+        el('input', { class: 'cell v', value: c.path, placeholder: 'data.token', 'aria-label': 'Path', oninput: (e) => {
+          c.path = e.target.value
+        } }),
+        el('button', { class: 'x-btn', type: 'button', 'aria-label': 'Remove capture', html: ico(I.x, 11, 2.3), onclick: () => {
+          req.captures = req.captures.filter((x) => x.id !== c.id)
+          commit()
+        } })
+      ])
+    )
+  }
+
+  box.append(
+    el('button', { class: 'addbtn', type: 'button', html: `${ico(I.plus, 10, 2.4)}<span>Capture a value</span>`, onclick: () => {
+      ;(req.captures ??= []).push({ id: uid('cap'), name: '', from: 'body', path: '' })
+      commit()
+    } })
+  )
+
+  const uses = variablesUsed(req)
+  if (uses.length) {
+    box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Needs' })]))
+    const known = envValues()
+    for (const name of uses) {
+      const from = allRequests().find((r) => (r.captures ?? []).some((c) => c.name === name))
+      const set = Object.prototype.hasOwnProperty.call(known, name)
+      box.append(
+        el('div', { class: `chg ${from || set ? 'added' : 'removed'}` }, [
+          el('b', { text: from ? 'chained' : set ? 'set' : 'missing' }),
+          el('span', { class: 'p', text: `{{${name}}}` }),
+          el('span', { class: from || set ? 'now' : 'was', text: from ? `from ${from.name}` : set ? String(known[name]).slice(0, 26) : 'nothing provides this' })
+        ])
+      )
+    }
+  }
+  return box
+}
+
+/* ------------------------------------------------------ response panels */
+
+function respPanel(req, res) {
+  if (S.respTab === 'brief') return briefPanel(req)
+  if (!res) return el('div', { class: 'nothing', text: 'Send this request and the analysis appears here.' })
+  switch (S.respTab) {
+    case 'payload':
+      return payloadPanel(res)
+    case 'headers':
+      return headersPanel(res)
+    case 'shape':
+      return shapePanel(res)
+    case 'diff':
+      return diffPanel(req, res)
+    case 'notes':
+      return notesPanel(res)
+    case 'timing':
+      return timingPanel(res)
+    default:
+      return resultPanel(res)
+  }
+}
+
+function briefPanel(req) {
+  const box = el('div')
+  box.append(
+    el('dl', { class: 'pairs' }, [
+      el('dt', { text: 'Collection' }),
+      el('dd', { text: collectionOf(req.id)?.name ?? '—' }),
+      el('dt', { text: 'Flow' }),
+      el('dd', { text: flowOf(req.id)?.name ?? '—' }),
+      el('dt', { text: 'Resolved' }),
+      el('dd', { text: buildUrl(req, envValues()) }),
+      el('dt', { text: 'Auth' }),
+      el('dd', { text: req.auth?.kind ?? 'none' })
+    ])
+  )
+
+  if (req.recorded) {
+    box.append(el('div', { class: 'lbl', style: 'margin-top:14px' }, [el('span', { text: 'When recorded' })]))
+    box.append(
+      el('dl', { class: 'pairs' }, [
+        el('dt', { text: 'Status' }),
+        el('dd', { text: `${req.recorded.status} ${req.recorded.statusText}` }),
+        el('dt', { text: 'Took' }),
+        el('dd', { text: `${req.recorded.durationMs}ms` }),
+        el('dt', { text: 'Size' }),
+        el('dd', { text: fmtBytes(req.recorded.bytes) })
+      ])
+    )
+    if (req.recorded.responseBody) {
+      box.append(el('div', { class: 'lbl', style: 'margin-top:12px' }, [el('span', { text: 'Example payload' })]))
+      box.append(source(prettyJson(req.recorded.responseBody)))
+    }
+  }
+
+  const runs = S.history.filter((h) => h.requestId === req.id)
+  if (runs.length) {
+    box.append(el('div', { class: 'lbl', style: 'margin-top:14px' }, [el('span', { text: 'Recent runs' })]))
+    for (const h of runs.slice(0, 8)) {
+      box.append(
+        el('div', { class: 'snap' }, [
+          el('span', { class: 'when', text: new Date(h.at).toLocaleTimeString() }),
+          el('span', { class: `code ${tone(h.status)}`, text: String(h.status || 'ERR') }),
+          el('span', { class: 'nm', text: h.env }),
+          el('span', { class: 'ms', text: `${h.ms}ms` })
+        ])
+      )
+    }
+  }
+  return box
+}
+
+const tile = (t, v, l) => el('div', { class: `tile ${t}` }, [el('b', { text: v }), el('span', { text: l })])
+
+function resultPanel(res) {
+  const box = el('div')
+  if (res.error) {
+    box.append(el('div', { class: 'find bad' }, [el('div', { class: 'find-bar' }), el('div', {}, [el('b', { text: 'No response' }), el('p', { text: res.error })])]))
+    return box
+  }
+  box.append(
+    el('div', { class: 'tiles' }, [
+      tile(tone(res.status), String(res.status), word(res.status)),
+      tile(res.timing.total > 1000 ? 'warn' : 'info', String(res.timing.total), 'milliseconds'),
+      tile('', fmtBytes(res.bytes), 'downloaded'),
+      tile(res.request?.url?.startsWith('https') ? 'ok' : 'warn', res.request?.url?.startsWith('https') ? 'TLS' : 'PLAIN', 'transport')
+    ])
+  )
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Assertions' })]))
+  if (!res.checks.length) box.append(el('p', { class: 'note', text: 'Nothing checked this response.' }))
+  for (const c of res.checks) {
+    box.append(
+      el('div', { class: `chg ${c.ok ? 'added' : 'removed'}` }, [
+        el('b', { text: c.ok ? 'pass' : 'fail' }),
+        el('span', { class: 'p', text: SUBJECTS.find((s) => s.id === c.assertion.subject)?.label ?? c.assertion.subject }),
+        el('span', { class: c.ok ? 'now' : 'was', text: c.detail })
+      ])
+    )
+  }
+  return box
+}
+
+function prettyJson(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+function source(text) {
+  const pre = el('pre', { class: 'src' })
+  for (const line of String(text ?? '').split('\n').slice(0, 3000)) pre.append(el('span', { class: 'ln', html: colour(line) }))
+  return pre
+}
+
+function colour(line) {
+  return esc(line).replace(
+    /("(?:\\.|[^"\\])*")(\s*:)?|(\b-?\d+(?:\.\d+)?\b)|(\btrue\b|\bfalse\b)|(\bnull\b)|([{}[\],])/g,
+    (m, str, colon, num, bool, nul, punc) => {
+      if (str) return colon ? `<span class="t-key">${str}</span><span class="t-punc">${colon}</span>` : `<span class="t-str">${str}</span>`
+      if (num) return `<span class="t-num">${num}</span>`
+      if (bool) return `<span class="t-bool">${bool}</span>`
+      if (nul) return `<span class="t-null">${nul}</span>`
+      if (punc) return `<span class="t-punc">${punc}</span>`
+      return m
+    }
+  )
+}
+
+function payloadPanel(res) {
+  const box = el('div')
+  if (res.truncated) box.append(el('p', { class: 'note', text: 'Only the first 4 MB is shown. Assertions ran against everything that arrived.' }))
+  box.append(source(res.json !== undefined ? JSON.stringify(res.json, null, 2) : res.body || '(empty)'))
+  return box
+}
+
+const mask = (v) => (String(v).length <= 12 ? '••••••' : `${String(v).slice(0, 6)}${'•'.repeat(9)}${String(v).slice(-4)}`)
+
+function headersPanel(res) {
+  const box = el('div')
+  box.append(el('div', { class: 'lbl' }, [el('span', { text: 'Response' })]))
+  const a = el('dl', { class: 'pairs' })
+  for (const [k, v] of Object.entries(res.headers ?? {})) a.append(el('dt', { text: k }), el('dd', { text: v }))
+  box.append(a)
+
+  box.append(el('div', { class: 'lbl', style: 'margin-top:14px' }, [el('span', { text: 'Request' })]))
+  const b = el('dl', { class: 'pairs' })
+  for (const [k, v] of Object.entries(res.request?.headers ?? {})) {
+    // A live credential is never printed back into a panel that gets shared.
+    const secret = S.prefs.maskCredentials !== false && /authorization|api[-_]?key|token|cookie/i.test(k)
+    b.append(el('dt', { text: k }), el('dd', { text: secret ? mask(v) : v }))
+  }
+  box.append(b)
+  return box
+}
+
+function shapePanel(res) {
+  const box = el('div')
+  if (res.json === undefined) {
+    box.append(el('p', { class: 'note', text: 'The response is not JSON, so there is no structure to explore.' }))
+    return box
+  }
+  const rows = tree(res.json)
+  const shut = new Set()
+  const host = el('div', { class: 'tree-json' })
+  const paint = () => {
+    host.replaceChildren()
+    for (const n of rows) {
+      if ([...shut].some((p) => n.path !== p && n.path.startsWith(`${p}.`))) continue
+      host.append(
+        el('div', { class: 'tj', style: `padding-left:${n.depth * 13}px` }, [
+          el('span', { class: 'tw', text: n.leaf ? '' : shut.has(n.path) ? '▸' : '▾', onclick: () => {
+            shut.has(n.path) ? shut.delete(n.path) : shut.add(n.path)
+            paint()
+          } }),
+          el('span', { class: 'tk', text: n.key }),
+          el('span', { class: 'tt', text: n.kind }),
+          el('span', { class: 'tv', text: n.preview })
+        ])
+      )
+    }
+  }
+  paint()
+  box.append(host)
+  return box
+}
+
+const brief = (v) => String((typeof v === 'string' ? v : JSON.stringify(v)) ?? '').slice(0, 36)
+
+function diffPanel(req, res) {
+  const box = el('div')
+  const before = S.previous.get(req.id)
+  if (!before) {
+    box.append(el('p', { class: 'note', text: 'Nothing to compare yet. Send this a second time and every field that moved is listed here.' }))
+    return box
+  }
+  const changes = diff(before.json, res.json)
+  box.append(el('p', { class: 'note', text: `Against the run at ${new Date(before.at).toLocaleTimeString()} — ${diffSummary(changes)}.` }))
+  for (const c of changes.slice(0, 120)) {
+    box.append(
+      el('div', { class: `chg ${c.kind}` }, [
+        el('b', { text: c.kind }),
+        el('span', { class: 'p', text: c.path }),
+        c.kind === 'removed' ? el('span', { class: 'was', text: brief(c.before) }) : null,
+        c.kind === 'added' ? el('span', { class: 'now', text: brief(c.after) }) : null,
+        c.kind === 'changed' || c.kind === 'retyped'
+          ? el('span', {}, [el('span', { class: 'was', text: brief(c.before ?? c.from) }), el('span', { text: ' → ' }), el('span', { class: 'now', text: brief(c.after ?? c.to) })])
+          : null
+      ])
+    )
+  }
+  return box
+}
+
+function notesPanel(res) {
+  const box = el('div')
+  box.append(el('p', { class: 'note', text: 'Every line is a rule over this response, with the evidence that produced it. Nothing here is guessed.' }))
+  for (const f of res.findings ?? []) {
+    box.append(
+      el('div', { class: `find ${f.level}` }, [
+        el('div', { class: 'find-bar' }),
+        el('div', {}, [el('b', { text: f.title }), el('p', { text: f.detail }), f.hint ? el('em', { text: f.hint }) : null])
+      ])
+    )
+  }
+  return box
+}
+
+function timingPanel(res) {
+  const box = el('div')
+  if (res.error) {
+    box.append(el('p', { class: 'note', text: 'The request never completed, so there is nothing to break down.' }))
+    return box
+  }
+  const t = res.timing
+  const total = Math.max(t.total, 1)
+  const phases = [
+    ['DNS lookup', 0, t.dns, 'dns'],
+    ['TCP connect', t.dns, t.tcp, 'tcp'],
+    ['TLS handshake', t.tcp, t.tls || t.tcp, 'tls'],
+    ['Waiting', t.tls || t.tcp, t.first, 'wait'],
+    ['Download', t.first, t.end, 'down']
+  ]
+  const grid = el('div', { class: 'wf' })
+  for (const [name, from, to, cls] of phases) {
+    const span = Math.max(0, to - from)
+    grid.append(
+      el('span', { class: 'wf-n', text: name }),
+      el('span', { class: 'wf-ms', text: span ? `${span}ms` : '—' }),
+      el('div', { class: 'wf-t' }, [el('div', { class: `wf-b ${cls}`, style: `left:${(from / total) * 100}%;width:${Math.max(span ? 1.5 : 0, (span / total) * 100)}%` })])
+    )
+  }
+  box.append(grid)
+  box.append(
+    el('dl', { class: 'pairs', style: 'margin-top:12px' }, [
+      el('dt', { text: 'Started' }),
+      el('dd', { text: new Date(res.at).toLocaleTimeString() }),
+      el('dt', { text: 'Round trip' }),
+      el('dd', { text: `${t.total}ms` }),
+      el('dt', { text: 'Downloaded' }),
+      el('dd', { text: fmtBytes(res.bytes) })
+    ])
+  )
+  return box
+}
+
+/* ================================================================ sending */
+
+async function send(req) {
+  if (S.busy.has(req.id)) return
+
+  // Production is named, never blocked — a suite that will not touch it is not
+  // much of a suite — but it is worth one deliberate press.
+  const env = environment()
+  if (S.prefs.confirmProduction !== false && env && /prod|live|release/i.test(env.name)) {
+    const go = await ask({
+      title: `Send to ${env.name}?`,
+      blurb: `This environment is named like production, and ${req.method} ${buildUrl(req, envValues())} really will be sent.`,
+      danger: 'Send it'
+    })
+    if (!go) return
+  }
+
+  S.busy.add(req.id)
+  commit()
+
+  const spec = {
+    ...compile(req, envValues()),
+    timeoutMs: req.timeoutMs ?? Number(S.prefs.timeoutMs) ?? 30000,
+    followRedirects: S.prefs.followRedirects !== false,
+    verifyTls: S.prefs.verifyTls !== false,
+    maxBodyMb: Number(S.prefs.maxBodyMb) || 4
+  }
+  const at = Date.now()
+  const raw = await window.prism.http.send(spec)
+  S.busy.delete(req.id)
+
+  if (raw.error) {
+    remember(req, { error: raw.error, at, request: spec, checks: [], failed: 1, status: 0, timing: { total: 0 } })
+    commit()
+    toast('bad', raw.error)
+    return
+  }
+
+  let json
+  try {
+    json = JSON.parse(raw.body)
+  } catch {
+    json = undefined
+  }
+
+  const response = { ...raw, json }
+  const checks = runAll(req.assertions, response)
+  const result = {
+    ...response,
+    at,
+    request: spec,
+    checks,
+    failed: checks.filter((c) => !c.ok).length,
+    findings: analyse(response, { ...spec, secure: raw.secure }, checks)
+  }
+
+  // Captured values land in the environment, which is what lets the next
+  // request in the flow use them without anyone copying anything.
+  for (const cap of req.captures ?? []) {
+    if (!cap.name || !environment()) continue
+    const value =
+      cap.from === 'header'
+        ? Object.entries(response.headers ?? {}).find(([k]) => k.toLowerCase() === cap.path.toLowerCase())?.[1]
+        : jsonPath(json, cap.path)
+    if (value !== undefined) environment().values[cap.name] = String(value)
+  }
+
+  remember(req, result)
+  S.respTab = result.failed ? 'notes' : 'result'
+  commit()
+  toast(result.failed ? 'bad' : 'ok', `${req.name} — ${raw.status} in ${raw.timing.total}ms`)
+}
+
+function remember(req, result) {
+  const was = S.results.get(req.id)
+  if (was && was.json !== undefined) S.previous.set(req.id, was)
+  S.results.set(req.id, result)
+  S.history.unshift({
+    id: uid('h'),
+    requestId: req.id,
+    name: req.name,
+    method: req.method,
+    url: result.request?.url ?? req.url,
+    status: result.status,
+    ms: result.timing?.total ?? 0,
+    at: result.at,
+    env: environment()?.name ?? '—',
+    failed: result.failed
+  })
+  S.history = S.history.slice(0, Math.max(10, Number(S.prefs.historyLimit) || 80))
+}
+
+/* ================================================================= import */
+
+async function doImport() {
+  const chosen = await window.prism.file.open([
+    { name: 'Collections', extensions: ['json'] },
+    { name: 'All files', extensions: ['*'] }
+  ])
+  if (!chosen) return
+  applyImport(readCollection(chosen.text, chosen.name))
+}
+
+const sourceLabel = (s) =>
+  ({ 'rebind-workspace': 'a Rebind recording', 'rebind-suite': 'a Rebind flow', postman: 'a Postman collection', 'postman-environment': 'a Postman environment' })[s] ??
+  'a collection'
+
+function applyImport(result) {
+  if (!result.ok) {
+    toast('bad', result.error)
+    return
+  }
+  if (result.collection) S.collections.push(result.collection)
+  if (result.environments?.length) {
+    S.environments.push(...result.environments)
+    if (!S.envId) S.envId = S.environments[0].id
+  }
+  if (result.recorded?.length) {
+    S.recorded.push(...result.recorded)
+    paintIntake()
+  }
+  const n = countRequests(result)
+  toast('ok', `${result.name} — ${n} request${n === 1 ? '' : 's'} from ${sourceLabel(result.source)}`)
+  if (!S.pickedId) S.pickedId = allRequests()[0]?.id ?? ''
+  commit()
+  setTimeout(fit, 30)
+}
+
+function paintIntake() {
+  const panel = $('intake')
+  if (!S.recorded.length) {
+    panel.hidden = true
+    return
+  }
+  panel.hidden = false
+  $('intakeCount').textContent = `${S.recorded.length} recorded`
+  const rows = $('intakeRows')
+  rows.replaceChildren()
+  S.recorded.forEach((req, i) => {
+    rows.append(
+      el('button', { class: 'inrow', type: 'button', style: `animation-delay:${Math.min(i * 45, 550)}ms`, title: 'Turn into a test', onclick: () => convert(req) }, [
+        el('span', { class: `verb ${req.method.toLowerCase()}`, text: req.method }),
+        el('span', { class: 'p', text: shortPath(req.url) }),
+        el('span', { class: `code ${tone(req.recorded?.status ?? 0)}`, text: String(req.recorded?.status ?? 0) }),
+        el('span', { class: 'ms', text: `${req.recorded?.durationMs ?? 0}ms` })
+      ])
+    )
+  })
+}
+
+/**
+ * A recorded call becomes a test, with assertions proposed from what it
+ * actually did — the whole reason recording is worth anything.
+ */
+function convert(req) {
+  let json
+  try {
+    json = JSON.parse(req.recorded?.responseBody ?? '')
+  } catch {
+    json = undefined
+  }
+  req.assertions = suggestFor(req.recorded, json)
+
+  let col = S.collections.find((c) => c.source === 'rebind-workspace') ?? S.collections[0]
+  if (!col) {
+    col = emptyCollection('Recorded', [])
+    S.collections.push(col)
+  }
+  let flow = col.flows.find((f) => f.name === 'Recorded')
+  if (!flow) {
+    flow = emptyFlow('Recorded')
+    col.flows.push(flow)
+  }
+  flow.requests.push(req)
+  S.recorded = S.recorded.filter((r) => r !== req)
+  S.pickedId = req.id
+  paintIntake()
+  commit()
+  toast('ok', `${req.name} — ${req.assertions.length} assertions proposed`)
+}
+
+/* ================================================================= export */
+
+function openExport() {
+  const req = current()
+  const flow = req ? flowOf(req.id) : allFlows()[0]
+  if (!req && !flow) {
+    toast('bad', 'There is nothing to export yet.')
+    return
+  }
+  let target = 'curl'
+  const list = el('div', { class: 'exp-list' })
+  const out = el('pre')
+  const fname = el('span')
+
+  const paint = () => {
+    list.replaceChildren()
+    for (const group of GROUPS) {
+      const items = TARGETS.filter((t) => t.group === group)
+      if (!items.length) continue
+      const box = el('div', {}, [el('h4', { text: group })])
+      for (const t of items) {
+        box.append(
+          el('button', { class: `exp-opt${t.id === target ? ' on' : ''}`, type: 'button', onclick: () => {
+            target = t.id
+            paint()
+          } }, [el('span', { class: 'exp-ext', text: `.${t.ext.split('.').pop()}` }), el('span', { text: t.label })])
+        )
+      }
+      list.append(box)
+    }
+    out.textContent = generate(target, { request: req, flow, environment: environment() })
+    const t = TARGETS.find((x) => x.id === target)
+    fname.textContent = `${slug(WHOLE_FLOW.has(target) ? flow?.name ?? 'flow' : req?.name ?? 'request')}.${t.ext}`
+  }
+  paint()
+
+  sheet({
+    title: 'Export',
+    blurb: 'The preview is exactly what gets written. Variables stay variables — no credential is ever resolved into an exported file.',
+    body: el('div', { class: 'exp' }, [list, el('div', { class: 'exp-out' }, [el('div', { class: 'exp-out-top' }, [fname, el('span', { class: 'spacer' })]), out])]),
+    acts: [
+      { label: 'Copy', onClick: () => {
+        navigator.clipboard.writeText(out.textContent)
+        toast('ok', 'Copied')
+      } },
+      { label: 'Save file', go: true, onClick: async () => {
+        const path = await window.prism.file.save({
+          name: fname.textContent,
+          text: out.textContent,
+          filters: [{ name: 'File', extensions: [fname.textContent.split('.').pop()] }]
+        })
+        if (path) toast('ok', `Written to ${path}`)
+      } }
+    ]
+  })
+}
+
+/* =========================================================== environments */
+
+function openEnvironments() {
+  let currentId = S.envId || S.environments[0]?.id || ''
+  const body = el('div', { class: 'envs' })
+
+  const paint = () => {
+    body.replaceChildren()
+    const list = el('div', { class: 'envlist' })
+    for (const env of S.environments) {
+      list.append(
+        el('div', { style: 'display:flex;gap:4px;align-items:center' }, [
+          el('button', { class: `envopt${env.id === currentId ? ' on' : ''}`, type: 'button', style: 'flex:1', onclick: () => {
+            currentId = env.id
+            paint()
+          } }, [
+            el('span', { class: `env-dot${/prod|live/i.test(env.name) ? ' risky' : ' on'}` }),
+            el('span', { class: 'grow', text: env.name }),
+            el('span', { class: 'count', text: String(Object.keys(env.values ?? {}).length) })
+          ]),
+          el('button', { class: 'rowbtn del', style: 'opacity:1', type: 'button', 'aria-label': `Delete ${env.name}`, html: ico(I.bin, 12, 1.9), onclick: () => {
+            S.environments = S.environments.filter((e) => e.id !== env.id)
+            if (S.envId === env.id) S.envId = S.environments[0]?.id ?? ''
+            currentId = S.envId
+            paint()
+            commit()
+          } })
+        ])
+      )
+    }
+    list.append(
+      el('button', { class: 'addbtn', type: 'button', html: `${ico(I.plus, 10, 2.4)}<span>New environment</span>`, onclick: () => {
+        const env = { id: uid('env'), name: 'New environment', values: {}, secrets: [] }
+        S.environments.push(env)
+        currentId = env.id
+        paint()
+      } })
+    )
+
+    const env = S.environments.find((e) => e.id === currentId)
+    const right = el('div')
+    if (!env) {
+      right.append(el('p', { class: 'note', text: 'No environments yet. Create one, or import a Postman environment.' }))
+    } else {
+      right.append(
+        el('div', { class: 'fieldrow', style: 'margin-bottom:10px' }, [
+          el('label', { text: 'Name' }),
+          el('input', { value: env.name, oninput: (e) => {
+            env.name = e.target.value
+            paintBar()
+          } })
+        ])
+      )
+      if (/prod|live|release/i.test(env.name)) {
+        right.append(
+          el('p', { class: 'note', style: 'border-color:rgb(251 191 36 / 0.4);color:var(--hold)', text: 'This environment is named like production. Prism will not stop you — a suite that refuses to touch production is not much of a suite — but every request really is sent.' })
+        )
+      }
+      right.append(el('div', { class: 'lbl' }, [el('span', { text: 'Variables' }), el('em', { text: 'referred to as {{name}}' })]))
+      for (const [key, value] of Object.entries(env.values ?? {})) {
+        const secret = (env.secrets ?? []).includes(key)
+        right.append(
+          el('div', { class: 'varline' }, [
+            el('input', { class: 'vname', value: key, 'aria-label': 'Variable name', onchange: (e) => {
+              const next = e.target.value
+              if (!next || next === key) return
+              const copy = {}
+              for (const [k, v] of Object.entries(env.values)) copy[k === key ? next : k] = v
+              env.values = copy
+              paint()
+            } }),
+            el('input', { class: 'vval', value: secret ? '' : String(value), type: secret ? 'password' : 'text', placeholder: secret ? 'held for this session only' : '', 'aria-label': 'Value', oninput: (e) => {
+              env.values[key] = e.target.value
+            } }),
+            el('button', { class: `lockbtn${secret ? ' on' : ''}`, type: 'button', title: secret ? 'Secret — hidden here and never exported' : 'Mark as a secret', html: ico(I.lock, 12, 2), onclick: () => {
+              env.secrets = secret ? (env.secrets ?? []).filter((k) => k !== key) : [...(env.secrets ?? []), key]
+              paint()
+            } }),
+            el('button', { class: 'x-btn', style: 'opacity:1', type: 'button', 'aria-label': `Remove ${key}`, html: ico(I.x, 11, 2.3), onclick: () => {
+              delete env.values[key]
+              paint()
+            } })
+          ])
+        )
+      }
+      right.append(
+        el('button', { class: 'addbtn', type: 'button', html: `${ico(I.plus, 10, 2.4)}<span>Add variable</span>`, onclick: () => {
+          let name = 'new_variable'
+          let n = 1
+          while (Object.prototype.hasOwnProperty.call(env.values, name)) name = `new_variable_${(n += 1)}`
+          env.values[name] = ''
+          paint()
+        } })
+      )
+    }
+    body.append(list, right)
+  }
+  paint()
+
+  sheet({
+    title: 'Environments',
+    blurb: 'Values live only in this session. A variable marked secret is hidden here and is never written into an export.',
+    body,
+    acts: [{ label: 'Use this environment', go: true, onClick: () => {
+      S.envId = currentId
+      commit()
+      toast('ok', `Switched to ${environment()?.name ?? 'none'}`)
+    } }]
+  })
+}
+
+/* =============================================================== settings */
+
+function openSettings() {
+  const body = el('div', { class: 'prefs' })
+
+  const paint = () => {
+    body.replaceChildren()
+    for (const group of SET_GROUPS) {
+      const items = SETTINGS.filter((x) => x.group === group)
+      if (!items.length) continue
+      const box = el('section', { class: 'prefgroup' }, [el('h4', { text: group })])
+
+      for (const item of items) {
+        const control = el('div', { class: 'prefctl' })
+        const value = S.prefs[item.id]
+
+        if (item.kind === 'choice') {
+          const seg = el('div', { class: 'seg' })
+          for (const opt of item.options) {
+            seg.append(
+              el('button', { class: `segbtn${value === opt.id ? ' on' : ''}`, type: 'button', text: opt.label, onclick: () => {
+                setPref(item.id, opt.id)
+                if (item.id === 'theme') applyTheme()
+                paint()
+              } })
+            )
+          }
+          control.append(seg)
+        } else if (item.kind === 'toggle') {
+          control.append(
+            el('button', {
+              class: `switch${value ? ' on' : ''}${item.danger && !value ? ' warn' : ''}`,
+              type: 'button',
+              role: 'switch',
+              'aria-checked': String(Boolean(value)),
+              'aria-label': item.label,
+              onclick: () => {
+                setPref(item.id, !value)
+                paint()
+                commit()
+              }
+            }, [el('i')])
+          )
+        } else {
+          control.append(
+            el('input', {
+              class: 'prefnum',
+              type: 'number',
+              value: String(value),
+              min: String(item.min ?? 0),
+              max: String(item.max ?? 999999),
+              'aria-label': item.label,
+              onchange: (e) => {
+                const n = Math.min(item.max ?? Infinity, Math.max(item.min ?? 0, Number(e.target.value) || item.value))
+                setPref(item.id, n)
+                paint()
+              }
+            })
+          )
+          if (item.unit) control.append(el('span', { class: 'prefunit', text: item.unit }))
+        }
+
+        box.append(
+          el('div', { class: `prefrow${item.danger && value === false ? ' alert' : ''}` }, [
+            el('div', { class: 'prefwords' }, [
+              el('b', { text: item.label }),
+              el('p', { text: item.help }),
+              // Named so the claim that a setting does something is checkable
+              // rather than something you have to take on trust.
+              el('code', { text: item.wiredIn })
+            ]),
+            control
+          ])
+        )
+      }
+      body.append(box)
+    }
+
+    body.append(
+      el('section', { class: 'prefgroup' }, [
+        el('h4', { text: 'This session' }),
+        el('div', { class: 'prefrow' }, [
+          el('div', { class: 'prefwords' }, [
+            el('b', { text: 'Run history' }),
+            el('p', { text: `${S.history.length} run${S.history.length === 1 ? '' : 's'} held in memory. Nothing is written to disk.` })
+          ]),
+          el('button', { class: 'btn', type: 'button', text: 'Clear', onclick: () => {
+            S.history = []
+            S.results.clear()
+            S.previous.clear()
+            paint()
+            commit()
+            toast('ok', 'History cleared')
+          } })
+        ]),
+        el('div', { class: 'prefrow' }, [
+          el('div', { class: 'prefwords' }, [
+            el('b', { text: 'Preferences' }),
+            el('p', { text: 'Put every setting on this page back to its default.' })
+          ]),
+          el('button', { class: 'btn', type: 'button', text: 'Reset', onclick: () => {
+            for (const item of SETTINGS) S.prefs[item.id] = item.value
+            saveSettings(safeStorage(), S.prefs)
+            applyTheme()
+            paint()
+            commit()
+            toast('ok', 'Settings reset')
+          } })
+        ])
+      ])
+    )
+  }
+  paint()
+
+  sheet({
+    title: 'Settings',
+    blurb: 'Every switch here changes what Prism does, and each one names the function that reads it. Preferences are remembered; collections and environments are not.',
+    body,
+    acts: []
+  })
+}
+
+/* ================================================================ history */
+
+function openHistory() {
+  const body = el('div')
+  if (!S.history.length) body.append(el('p', { class: 'note', text: 'No runs yet in this session.' }))
+  for (const h of S.history) {
+    body.append(
+      el('button', { class: 'snap', type: 'button', onclick: () => {
+        closeSheet()
+        pick(h.requestId)
+      } }, [
+        el('span', { class: 'when', text: new Date(h.at).toLocaleTimeString() }),
+        el('span', { class: `verb ${h.method.toLowerCase()}`, text: h.method }),
+        el('span', { class: `code ${tone(h.status)}`, text: String(h.status || 'ERR') }),
+        el('span', { class: 'nm', text: h.name }),
+        el('span', { class: 'ms', text: `${h.ms}ms` }),
+        el('span', { class: 'when', text: h.env })
+      ])
+    )
+  }
+  sheet({ title: 'History', blurb: 'Every run in this session, newest first.', body, acts: [] })
+}
+
+/* ============================================================== flow run */
+
+async function runFlow() {
+  const req = current()
+  const flow = (req ? flowOf(req.id) : null) ?? allFlows().find((f) => f.requests.length)
+  if (!flow) {
+    toast('bad', 'There is no flow to run.')
+    return
+  }
+
+  const state = flow.requests.map((r) => ({ id: r.id, name: r.name, status: 'wait', ms: 0 }))
+  const body = el('div', { class: 'suite' })
+  const ring = el('div', { class: 'ring' })
+  const steps = el('div', { class: 'steps' })
+
+  const paint = () => {
+    const done = state.filter((s) => s.status === 'pass' || s.status === 'fail').length
+    const failed = state.filter((s) => s.status === 'fail').length
+    const pct = state.length ? done / state.length : 0
+    const C = 2 * Math.PI * 58
+    ring.innerHTML = `<svg width="140" height="140" viewBox="0 0 140 140">
+        <circle class="tr" cx="70" cy="70" r="58"></circle>
+        <circle class="fl${failed ? ' bad' : ''}" cx="70" cy="70" r="58" stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}"></circle>
+      </svg><b>${Math.round(pct * 100)}%</b>`
+    steps.replaceChildren()
+    for (const s of state) {
+      steps.append(
+        el('div', { class: `step${s.status === 'wait' ? ' wait' : ''}` }, [
+          el('span', { class: `state ${s.status === 'run' ? 'busy' : s.status === 'wait' ? '' : s.status}` }),
+          el('span', { class: 'nm', text: s.name }),
+          el('span', { class: 'ms', text: s.ms ? `${s.ms}ms` : s.status })
+        ])
+      )
+    }
+    body.replaceChildren(ring, steps)
+  }
+  paint()
+  sheet({ title: `Running ${flow.name}`, blurb: 'In order, so a value captured by one request is available to the next.', body, acts: [] })
+
+  for (const step of state) {
+    const request = findRequest(step.id)
+    if (!request) continue
+    step.status = 'run'
+    paint()
+    await send(request)
+    const res = S.results.get(step.id)
+    step.ms = res?.timing?.total ?? 0
+    step.status = res?.failed ? 'fail' : 'pass'
+    paint()
+  }
+  const failed = state.filter((s) => s.status === 'fail').length
+  toast(failed ? 'bad' : 'ok', `${flow.name} — ${state.length - failed} passed, ${failed} failed`)
+}
+
+/* ================================================================= sheets */
+
+let sheetUp = false
+
+let onSheetClose = null
+
+function sheet({ title, blurb, body, acts, onClose }) {
+  const veil = $('veil')
+  veil.replaceChildren()
+  veil.hidden = false
+  sheetUp = true
+  onSheetClose = onClose ?? null
+
+  const low = el('div', { class: 'sheet-low' }, [
+    el('button', { class: 'btn plain', type: 'button', text: 'Close', onclick: closeSheet }),
+    el('span', { class: 'spacer' })
+  ])
+  for (const a of acts ?? []) {
+    low.append(
+      el('button', { class: `btn${a.go ? ' go' : ''}${a.bad ? ' bad' : ''}`, type: 'button', text: a.label, onclick: async () => {
+        await a.onClick?.()
+        if (a.keepOpen !== true) closeSheet()
+      } })
+    )
+  }
+
+  veil.append(
+    el('div', { class: 'sheet' }, [
+      el('div', { class: 'sheet-top' }, [el('h2', { text: title }), blurb ? el('p', { text: blurb }) : null]),
+      el('div', { class: 'sheet-mid' }, [body]),
+      low
+    ])
+  )
+  veil.onpointerdown = (e) => {
+    if (e.target === veil) closeSheet()
+  }
+}
+
+/** A confirm that can be awaited, for a decision taken mid-flow. */
+function ask({ title, blurb, danger }) {
+  return new Promise((resolve) => {
+    let answered = false
+    sheet({
+      title,
+      blurb,
+      body: el('p', { class: 'note', text: 'Nothing has been sent yet.' }),
+      acts: [{ label: danger, bad: true, onClick: () => {
+        answered = true
+        resolve(true)
+      } }],
+      onClose: () => {
+        if (!answered) resolve(false)
+      }
+    })
+  })
+}
+
+function confirmSheet({ title, blurb, danger, onYes }) {
+  sheet({
+    title,
+    blurb,
+    body: el('p', { class: 'note', text: 'This cannot be undone from inside Prism.' }),
+    acts: [{ label: danger, bad: true, onClick: onYes }]
+  })
+}
+
+function closeSheet() {
+  $('veil').hidden = true
+  $('veil').replaceChildren()
+  sheetUp = false
+  const fn = onSheetClose
+  onSheetClose = null
+  fn?.()
+}
+
+/* =============================================================== palette */
+
+function openPalette() {
+  const veil = $('veil')
+  veil.replaceChildren()
+  veil.hidden = false
+  sheetUp = true
+
+  const items = allRequests().map((r) => ({ label: r.name, sub: `${r.method} ${shortPath(r.url)}`, run: () => pick(r.id) }))
+  items.push(
+    { label: 'Import a collection', sub: 'rebind or postman', run: doImport },
+    { label: 'Export', sub: 'code or collection', run: openExport },
+    { label: 'Environments', sub: 'variables', run: openEnvironments },
+    { label: 'History', sub: 'this session', run: openHistory },
+    { label: 'Run the flow', sub: 'in order', run: runFlow },
+    { label: 'New collection', sub: 'empty', run: newCollection },
+    { label: 'Tidy the plane', sub: 'lay out in order', run: tidy },
+    { label: 'Settings', sub: 'theme, sending, safety', run: openSettings },
+    { label: 'Switch theme', sub: 'dark or light', run: cycleTheme }
+  )
+
+  let index = 0
+  let shown = items
+  const list = el('div', { class: 'pal-list' })
+  const input = el('input', { placeholder: 'Find a request, or run a command…', 'aria-label': 'Search' })
+
+  const paint = () => {
+    list.replaceChildren()
+    shown.forEach((item, i) => {
+      list.append(
+        el('button', { class: `pal-item${i === index ? ' on' : ''}`, type: 'button', onclick: () => {
+          closeSheet()
+          item.run()
+        } }, [el('span', { text: item.label }), el('span', { class: 'sub', text: item.sub })])
+      )
+    })
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.toLowerCase()
+    shown = items.filter((i) => `${i.label} ${i.sub}`.toLowerCase().includes(q))
+    index = 0
+    paint()
+  })
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      index = Math.min(index + 1, shown.length - 1)
+      paint()
+      e.preventDefault()
+    } else if (e.key === 'ArrowUp') {
+      index = Math.max(index - 1, 0)
+      paint()
+      e.preventDefault()
+    } else if (e.key === 'Enter' && shown[index]) {
+      closeSheet()
+      shown[index].run()
+    }
+  })
+
+  paint()
+  veil.append(el('div', { class: 'pal' }, [input, list]))
+  veil.onpointerdown = (e) => {
+    if (e.target === veil) closeSheet()
+  }
+  input.focus()
+}
+
+/* ==================================================================== boot */
+
+function wire() {
+  $('winMin').onclick = () => window.prism.window.minimize()
+  $('winMax').onclick = () => window.prism.window.maximize()
+  $('winClose').onclick = () => window.prism.window.close()
+
+  $('importBtn').onclick = doImport
+  $('emptyImport').onclick = doImport
+  $('exportBtn').onclick = openExport
+  $('runFlowBtn').onclick = runFlow
+  $('envPick').onclick = openEnvironments
+  $('envBtn').onclick = openEnvironments
+  $('historyBtn').onclick = openHistory
+  $('finder').onclick = openPalette
+  $('settingsBtn').onclick = openSettings
+  $('themeBtn').onclick = cycleTheme
+  $('newCollectionBtn').onclick = newCollection
+  $('intakeHide').onclick = () => {
+    $('intake').hidden = true
+  }
+  $('intakeAll').onclick = () => {
+    const list = [...S.recorded]
+    for (const r of list) convert(r)
+    toast('ok', `${list.length} recorded calls converted`)
+  }
+  $('emptyNew').onclick = () => {
+    if (!S.collections.length) newCollection()
+    const col = S.collections[0]
+    if (!col.flows.length) col.flows.push(emptyFlow('Flow 1'))
+    addRequest(col.flows[0])
+  }
+
+  $('benchName').oninput = (e) => {
+    const req = current()
+    if (!req) return
+    req.name = e.target.value
+    paintTree()
+    const n = document.querySelector(`.node[data-id="${req.id}"] .node-name`)
+    if (n) n.textContent = req.name || 'Untitled'
+  }
+  $('urlInput').oninput = (e) => {
+    const req = current()
+    if (!req) return
+    req.url = e.target.value
+    live(req)
+  }
+  $('urlInput').onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      const req = current()
+      if (req) send(req)
+    }
+  }
+  $('methodPick').onchange = (e) => {
+    const req = current()
+    if (!req) return
+    req.method = e.target.value
+    commit()
+  }
+  $('sendBtn').onclick = () => {
+    const req = current()
+    if (req) send(req)
+  }
+  $('benchDelete').onclick = () => {
+    const req = current()
+    if (req) askDeleteRequest(req)
+  }
+
+  const grip = $('benchGrip')
+  grip.onkeydown = (e) => {
+    if (e.key === 'ArrowUp') S.split = clamp(S.split - 4, 20, 85)
+    if (e.key === 'ArrowDown') S.split = clamp(S.split + 4, 20, 85)
+    paintBench()
+  }
+  grip.onpointerdown = (e) => {
+    const host = $('benchSplit')
+    const box = host.getBoundingClientRect()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const move = (ev) => {
+      S.split = clamp(((ev.clientY - box.top) / box.height) * 100, 20, 85)
+      host.style.gridTemplateRows = `minmax(120px, ${S.split}fr) 7px minmax(110px, ${100 - S.split}fr)`
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      sheetUp ? closeSheet() : openPalette()
+    } else if (e.key === 'Escape' && sheetUp) {
+      closeSheet()
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const req = current()
+      if (req) send(req)
+    }
+  })
+
+  window.addEventListener('resize', drawBeams)
+}
+
+/** Dark → light → follow the system, from the bar. */
+function cycleTheme() {
+  const order = ['dark', 'light', 'system']
+  const next = order[(order.indexOf(S.prefs.theme) + 1) % order.length]
+  setPref('theme', next)
+  applyTheme()
+  paintBar()
+  toast('ok', next === 'system' ? 'Following the system theme' : `${next[0].toUpperCase()}${next.slice(1)} theme`)
+}
+
+function boot() {
+  S.prefs = loadSettings(safeStorage())
+  applyTheme()
+  wire()
+  wirePlane()
+  // Opens on a worked example rather than an empty plane: a login that gives a
+  // token, requests that spend it, and one wired to a value nothing provides.
+  applyImport(readCollection(JSON.stringify(demoWorkspace()), 'demo'))
+  commit()
+}
+
+boot()
