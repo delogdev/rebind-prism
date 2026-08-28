@@ -25,6 +25,13 @@
   },
   "type": "module",
   "main": "main.cjs",
+  "files": [
+    "main.cjs",
+    "preload.cjs",
+    "cli.mjs",
+    "lib/",
+    "renderer/"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -63,6 +70,11 @@
         "nsis",
         "zip"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
     },
     "mac": {
       "target": [
