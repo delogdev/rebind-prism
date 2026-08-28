@@ -113,16 +113,28 @@ Do both for a release, or the site is describing something that does not exist.
 
 ## Before the first publish
 
-Three things in `package.json` still point at a placeholder:
+`package.json` now points at the real account:
 
 ```json
-"homepage": "https://github.com/your-org/rebind-prism#readme",
-"repository": { "url": "https://github.com/your-org/rebind-prism.git" },
-"bugs":       { "url": "https://github.com/your-org/rebind-prism/issues" }
+"homepage": "https://github.com/delogdev/rebind-prism#readme",
+"repository": { "url": "git+https://github.com/delogdev/rebind-prism.git" },
+"bugs":       { "url": "https://github.com/delogdev/rebind-prism/issues" }
 ```
 
-npm renders all three on the package page, so publishing with `your-org` in
-them ships three dead links. Fix them in the same commit that creates the repo.
+npm renders all three on the package page, so they have to resolve before the
+package is published or it ships three dead links.
+
+**As of writing, `github.com/delogdev/rebind-prism` returns 404 to an
+unauthenticated request** — it is private, or not created yet. That matters more
+for the installer than for npm:
+
+> **Release assets on a private repository are not publicly downloadable.**
+> A download link from a private repo asks for a login and then refuses anyone
+> without access. If the point is "users can download the installer", the
+> repository has to be **public**.
+
+The account itself is public and holds two other repositories, so only this one
+needs opening up.
 
 The version is `0.1.0`. If that is meant to signal pre-release, publish to npm
 with a tag so it does not become `latest` for everyone:

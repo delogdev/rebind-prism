@@ -9,14 +9,14 @@ MIT licensed. No account, no licence key, no gated features: everything the app
 does, it does for everyone.
 
 ```bash
-git clone https://github.com/your-org/rebind-prism
+git clone https://github.com/delogdev/rebind-prism
 cd rebind-prism
 npm install
 npm start
 ```
 
 ```bash
-npm test          # 396 tests. No Electron, no browser, no display needed.
+npm test          # 399 tests. No Electron, no browser, no display needed.
 npm run dist      # installers for the current platform
 
 # and in CI
