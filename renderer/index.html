@@ -32,7 +32,6 @@
 
       <div class="bar-id">
         <b>Prism</b>
-        <span class="save-state" id="saveState" title="Everything saved"></span>
         <nav class="crumbs" id="crumbs" aria-label="Location"></nav>
       </div>
 
@@ -49,13 +48,28 @@
           <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="m6 9 6 6 6-6" /></svg>
         </button>
 
-        <button class="pill" id="importBtn" type="button" title="Import a Rebind or Postman collection">
+        <!-- The save control. A split button: the left half saves, the right
+             half opens the document menu (Save as, Open, Show in folder,
+             Discard). The file name and the dot beside it are the state,
+             written out rather than left to a tooltip on a 6px dot. -->
+        <div class="saver" id="saver">
+          <button class="pill save" id="saveBtn" type="button" title="Save this workspace to a file (Ctrl+S)">
+            <span class="save-state" id="saveState"></span>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8" /><path d="M7 3v5h8" /></svg>
+            <span class="save-name" id="saveLabel">Not saved to a file</span>
+          </button>
+          <button class="pill save-more" id="saveMenuBtn" type="button" aria-haspopup="menu" title="Save as, Open, and more">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+        </div>
+
+        <button class="pill compacts" id="importBtn" type="button" title="Import a Rebind or Postman collection">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11" /><path d="m7.5 9.5 4.5 4.5 4.5-4.5" /><path d="M4 20h16" /></svg>
-          Import
+          <span>Import</span>
         </button>
-        <button class="pill" id="exportBtn" type="button" title="Export code or a collection">
+        <button class="pill compacts" id="exportBtn" type="button" title="Export code or a collection">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14V3" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M4 20h16" /></svg>
-          Export
+          <span>Export</span>
         </button>
         <button class="pill go" id="runFlowBtn" type="button">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" stroke="none"><path d="M7 4v16l13-8z" /></svg>

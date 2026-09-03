@@ -345,6 +345,9 @@ textarea {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  /* Where the workspace is is useful; being able to save it is essential. */
+  flex: 0 1 auto;
+  overflow: hidden;
 }
 
 .bar-id > b {
@@ -379,7 +382,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: 9px;
-  flex: 1;
+  /* Shrinks before anything else does: the prompt is a hint, and every control
+     to its right is a verb. */
+  flex: 1 1 auto;
+  min-width: 120px;
   max-width: 400px;
   margin: 0 auto;
   height: 30px;
@@ -399,7 +405,13 @@ textarea {
 
 .finder span {
   flex: 1;
+  min-width: 0;
   text-align: left;
+  /* One line, always. Adding another control to the bar made this wrap into
+     two and grow the header, which is worse than a shortened prompt. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .finder kbd {
@@ -427,6 +439,7 @@ textarea {
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  flex: none;
 }
 
 .env-pick {
@@ -2912,6 +2925,11 @@ pre.src .ln::before {
 .toast.ok i {
   background: var(--pass);
 }
+/* A caution: something needs attention but nothing has gone wrong. Same amber
+   as the unsaved dot on the save button, so the two read as one idea. */
+.toast.hold i {
+  background: var(--hold);
+}
 
 @keyframes pop {
   from {
@@ -3581,11 +3599,35 @@ pre.src .ln::before {
 
 .ask-acts {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 20px;
   padding-top: 15px;
   border-top: 1px solid var(--edge);
+}
+
+/* Pushes Cancel to the left edge while the two answers stay together on the
+   right. A three-answer dialog reads as "leave" versus "one of these two",
+   and spacing is what says so -- but only inside a 440px dialog. The same
+   layout in the 1040px sheet put Cancel a screen away from the buttons it was
+   an alternative to, which is why this confirm has its own shape. */
+.ask-acts-gap {
+  flex: 1;
+}
+
+/* A caution rather than a deletion: the work survives in the autosave either
+   way, and only the file is behind. Red would overstate it. */
+.ask-mark.is-hold {
+  background: var(--hold-bg);
+  color: var(--hold);
+}
+
+.ask-aside {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-4);
 }
 
 .legend-sep {
@@ -3988,6 +4030,64 @@ pre.src .ln::before {
 
 /* ========================================= persistence, data, find, drift */
 
+/* ------------------------------------------------------------ the saver
+
+   A split button: the left half saves, the right half opens the document
+   menu. It replaces a 6px dot that sat beside the product name with only a
+   tooltip to say what it meant — next to a bar that offered Import, Export
+   and Run and no Save at all. The state is now a word and a file name, which
+   is the difference between an app that saves and an app that appears not
+   to. */
+
+.saver {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  /* One outline around both halves, so it reads as a single control. */
+  border: 1px solid var(--edge-2);
+  border-radius: var(--r1);
+  overflow: hidden;
+  max-width: 260px;
+}
+
+.saver .pill {
+  border: 0;
+  border-radius: 0;
+  height: 28px;
+}
+
+.saver .pill.save {
+  padding: 0 9px 0 8px;
+  min-width: 0;
+}
+
+/* The file name gives way before the icon or the dot do: which file it is
+   matters less than whether it is saved, and the tooltip carries the path. */
+.save-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.save-name.muted {
+  color: var(--ink-4);
+  font-weight: 500;
+}
+
+.saver .save-more {
+  padding: 0 6px;
+  border-left: 1px solid var(--edge-2);
+  color: var(--ink-3);
+}
+
+/* Unsaved is carried on the button as a whole, not only the dot, so it is
+   visible at a glance from across the bar. */
+.saver .pill.save.dirty .save-name {
+  color: var(--ink);
+  font-weight: 620;
+}
+
 .save-state {
   width: 6px;
   height: 6px;
@@ -3998,11 +4098,140 @@ pre.src .ln::before {
   transition: background var(--t) var(--ease), border-color var(--t) var(--ease);
 }
 
-/* Filled while there is something not yet written. Deliberately quiet — it is
-   reassurance, not an alert. */
-.save-state.dirty {
+/* Written and current. Deliberately quiet — it is reassurance, not an alert. */
+.save-state.is-saved {
+  background: var(--pass);
+  border-color: var(--pass);
+}
+
+/* Behind the file on disk. The one state worth noticing. */
+.save-state.is-unsaved,
+.save-state.is-pending {
   background: var(--hold);
   border-color: var(--hold);
+}
+
+.save-state.is-saving {
+  background: var(--ink-4);
+  border-color: var(--ink-4);
+  animation: save-pulse 900ms var(--ease) infinite;
+}
+
+/* Kept in the app but never written to a file: hollow, because nothing is
+   wrong and nothing is guaranteed either. */
+.save-state.is-autosaved {
+  background: transparent;
+  border-color: var(--edge-3);
+}
+
+@keyframes save-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------- the bar on a laptop
+
+   The bar carries eight controls and, on a 1366- or 1280-wide laptop, ran out
+   of room: the crumbs truncated to "Northwind — chec... / Authenticat...", the
+   finder truncated mid-word, and everything sat shoulder to shoulder.
+
+   So things give way in order of what they are worth per pixel, worst first:
+
+     1. The crumbs. They name the collection and flow of the open request —
+        which the tree on the left already shows as a selection, and the
+        workbench header repeats above the endpoint. Pure duplication, and the
+        widest single thing in the bar.
+     2. The finder's Ctrl+K hint. The shortcut still works; the badge is a
+        reminder, and one you only need once.
+     3. Import and Export labels. Occasional verbs with clear icons, and both
+        keep a title so nothing is guessed at.
+     4. The saved file name.
+
+   Run flow keeps its label at every width because it is the primary verb, and
+   the environment keeps its name because the difference between staging and
+   production must never be a colour alone. */
+
+@media (max-width: 1400px) {
+  .bar {
+    gap: 9px;
+  }
+
+  .crumbs {
+    display: none;
+  }
+}
+
+@media (max-width: 1280px) {
+  .finder kbd {
+    display: none;
+  }
+
+  .finder {
+    max-width: 320px;
+  }
+
+  /* The name shortens before it disappears: half a file name still answers
+     "which workspace am I in". */
+  .saver {
+    max-width: 190px;
+  }
+}
+
+@media (max-width: 1160px) {
+  .bar {
+    gap: 7px;
+    padding-right: 4px;
+  }
+
+  /* Icon-only, and square rather than a squashed pill. */
+  .bar-right .pill.compacts span:not(.save-state):not(.save-name) {
+    display: none;
+  }
+
+  .bar-right .pill.compacts {
+    padding: 0 8px;
+  }
+
+  .finder {
+    max-width: 260px;
+    min-width: 96px;
+  }
+
+  .saver {
+    max-width: 150px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .save-name {
+    display: none;
+  }
+
+  .saver {
+    max-width: none;
+  }
+
+  .finder span {
+    display: none;
+  }
+
+  .finder {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .save-state.is-saving {
+    animation: none;
+  }
 }
 
 .tree-filter {

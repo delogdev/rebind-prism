@@ -28,7 +28,11 @@ contextBridge.exposeInMainWorld('prism', {
     autosave: (text) => ipcRenderer.invoke('workspace:autosave', text),
     restore: () => ipcRenderer.invoke('workspace:restore'),
     forget: () => ipcRenderer.invoke('workspace:forget'),
-    saveAs: (payload) => ipcRenderer.invoke('workspace:saveAs', payload)
+    saveAs: (payload) => ipcRenderer.invoke('workspace:saveAs', payload),
+    /** Writes back to an already-chosen file, so Save needs no dialog. */
+    write: (payload) => ipcRenderer.invoke('workspace:write', payload),
+    reveal: (path) => ipcRenderer.invoke('workspace:reveal', path),
+    reread: (path) => ipcRenderer.invoke('workspace:reread', path)
   },
   cookies: {
     list: () => ipcRenderer.invoke('cookies:list'),

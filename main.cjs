@@ -8,7 +8,7 @@
  * is one of the handlers below. That is the whole security model: if it is not
  * in this file, the page cannot do it.
  */
-const { app, BrowserWindow, dialog, ipcMain, protocol, net, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, protocol, net, screen, shell } = require('electron')
 const { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, rmSync } = require('node:fs')
 // Electron already exports a `net`; this is the socket one.
 const sockets = require('node:net')
@@ -48,15 +48,53 @@ const jarReady = import('./lib/cookies.js').then((m) => {
   jar = new m.Jar()
 })
 
+/**
+ * The app icon, for the window frame and the taskbar.
+ *
+ * electron-builder stamps build/icon.ico into the packaged executable, which
+ * covers the installed app on Windows -- but a BrowserWindow needs a real file,
+ * and on Linux the window manager reads the window icon rather than the binary.
+ * So nothing set an icon at runtime and a dev run showed Electron's own logo.
+ *
+ * Both locations are tried because build/ is a build resource that does not
+ * ship inside the app bundle: packaged, the file sits beside it in resources.
+ */
+function appIcon() {
+  const candidates = [join(process.resourcesPath || '', 'icon.png'), join(__dirname, 'build', 'icon.png')]
+  return candidates.find((file) => existsSync(file))
+}
+
 function createWindow() {
+  const icon = appIcon()
+
+  /**
+   * Sized against the screen rather than a fixed guess.
+   *
+   * A hard 1560x980 with a 1120x700 minimum is bigger than a real laptop. A
+   * 1366x768 panel at 150% scaling reports a work area of 1280x672 points — so
+   * the window opened wider *and* taller than the whole desktop, and the
+   * minimum height alone exceeded it. That is what made the top bar look
+   * crowded on a laptop and roomy on a monitor: the bar was fine, the window
+   * was larger than the space it had.
+   *
+   * The minimums are clamped too. A minimum a display cannot satisfy is not a
+   * minimum, it is a window the user cannot make fit.
+   */
+  const area = screen.getPrimaryDisplay().workAreaSize
+  // A couple of points of inset. Fractional scaling rounds DIP sizes up, so
+  // asking for exactly the work area produced a window one or two pixels
+  // wider than the desktop -- and it reads better not flush to the edges.
+  const fit = (want, available) => Math.max(480, Math.min(want, available - 16))
+
   win = new BrowserWindow({
-    width: 1560,
-    height: 980,
-    minWidth: 1120,
-    minHeight: 700,
+    width: fit(1560, area.width),
+    height: fit(980, area.height),
+    minWidth: fit(1120, area.width),
+    minHeight: fit(700, area.height),
     show: false,
     frame: false,
     backgroundColor: '#08090C',
+    ...(icon ? { icon } : {}),
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 18, y: 20 },
     webPreferences: {
@@ -99,6 +137,43 @@ const MIME = {
  */
 const stateDir = () => join(app.getPath('userData'), 'state')
 const autosavePath = () => join(stateDir(), 'workspace.json')
+
+/**
+ * Which file the last session was editing.
+ *
+ * Kept beside the autosave rather than inside it: the autosave is written in
+ * the same format as a user's own `.prism.json`, and a machine-local absolute
+ * path has no business in a file people commit and send to each other.
+ *
+ * Kept in the *main* process rather than in the renderer's storage for a
+ * second reason. `workspace:write` only accepts paths the user pointed a
+ * dialog at, which is what stops the page naming its own — and that set is
+ * session-scoped, so a remembered path would be refused on the next start. A
+ * path this process wrote down itself, after a real dialog, is one it can
+ * vouch for; a path handed over by the renderer is not.
+ */
+const sessionPath = () => join(stateDir(), 'session.json')
+
+function rememberFile(path) {
+  try {
+    writeAtomic(sessionPath(), JSON.stringify({ filePath: String(path ?? ''), at: Date.now() }, null, 2))
+  } catch {
+    /* the pointer is a convenience; losing it costs one Save As */
+  }
+}
+
+/** The remembered file, if it is still on disk. */
+function lastFile() {
+  try {
+    if (!existsSync(sessionPath())) return ''
+    const held = JSON.parse(readFileSync(sessionPath(), 'utf8'))
+    const path = String(held?.filePath ?? '')
+    // A file that has been moved or deleted is not a file to offer back.
+    return path && existsSync(path) ? path : ''
+  } catch {
+    return ''
+  }
+}
 
 function writeAtomic(path, text) {
   mkdirSync(join(path, '..'), { recursive: true })
@@ -148,15 +223,32 @@ ipcMain.handle('window:isMaximized', () => win?.isMaximized() ?? false)
 
 /* -------------------------------------------------------------------- files */
 
+/**
+ * Files the user has chosen in this session, by hand, through a dialog.
+ *
+ * This is what makes `workspace:write` safe. Save has to be able to write back
+ * to the open file without asking every time -- that is the whole difference
+ * between Save and Save As -- but a renderer naming its own path would be a way
+ * to overwrite anything on the machine. So the main process only writes where
+ * the *user* has already pointed a file dialog, and the renderer supplies a
+ * path it was handed rather than one it composed.
+ *
+ * Session-scoped on purpose: it is cleared when the app closes, so a stale path
+ * from a previous run cannot be written to without the user choosing it again.
+ */
+const chosenPaths = new Set()
+
 ipcMain.handle('file:open', async (_e, filters) => {
   if (!win) return null
   const res = await dialog.showOpenDialog(win, {
-    title: 'Import',
+    title: 'Open',
     properties: ['openFile'],
     filters: filters ?? [{ name: 'Collections', extensions: ['json'] }]
   })
   if (res.canceled || !res.filePaths[0]) return null
   const path = res.filePaths[0]
+  chosenPaths.add(path)
+  rememberFile(path)
   // Read as text and handed over as text: parsing is the renderer's problem,
   // and a malformed file should surface as a readable error there rather than
   // as an exception in the process that owns the window.
@@ -211,8 +303,14 @@ ipcMain.handle('workspace:autosave', (_e, text) => {
 ipcMain.handle('workspace:restore', () => {
   try {
     const path = autosavePath()
-    if (!existsSync(path)) return null
-    return { path, text: readFileSync(path, 'utf8') }
+    // The remembered file is handed back even when there is no autosave: a
+    // workspace saved and then closed cleanly should still open as itself.
+    const filePath = lastFile()
+    // Vouched for here, so Save writes back to it without asking again. This
+    // process recorded it after a real dialog, which is what the gate is for.
+    if (filePath) chosenPaths.add(filePath)
+    if (!existsSync(path)) return filePath ? { path: null, text: '', filePath } : null
+    return { path, text: readFileSync(path, 'utf8'), filePath }
   } catch {
     return null
   }
@@ -223,6 +321,9 @@ ipcMain.handle('workspace:restore', () => {
 ipcMain.handle('workspace:forget', () => {
   try {
     if (existsSync(autosavePath())) rmSync(autosavePath())
+    // The pointer goes with it. Left behind, the next start would announce a
+    // file for a workspace that had just been deleted.
+    if (existsSync(sessionPath())) rmSync(sessionPath())
     return true
   } catch {
     return false
@@ -237,8 +338,60 @@ ipcMain.handle('workspace:saveAs', async (_e, { name, text }) => {
     filters: [{ name: 'Prism workspace', extensions: ['json'] }]
   })
   if (res.canceled || !res.filePath) return null
-  writeAtomic(res.filePath, String(text))
-  return res.filePath
+  try {
+    writeAtomic(res.filePath, String(text))
+  } catch (err) {
+    return { error: err.message }
+  }
+  chosenPaths.add(res.filePath)
+  rememberFile(res.filePath)
+  return { path: res.filePath }
+})
+
+/**
+ * Writes the workspace back to the file it came from, with no dialog.
+ *
+ * The other half of Save As, and the reason Save can be a one-key action. Only
+ * a path the user has already chosen this session is accepted -- see
+ * `chosenPaths` -- so this cannot be pointed at an arbitrary file.
+ *
+ * Atomic, like the autosave: the file people are about to commit is the worst
+ * possible thing to leave half-written.
+ */
+ipcMain.handle('workspace:write', (_e, { path, text }) => {
+  const target = String(path ?? '')
+  if (!chosenPaths.has(target)) {
+    return { error: 'That file was not opened or saved in this session — use Save as instead.' }
+  }
+  try {
+    writeAtomic(target, String(text))
+    return { ok: true, path: target }
+  } catch (err) {
+    return { error: err.message }
+  }
+})
+
+/** Shows a saved workspace in the OS file browser. */
+ipcMain.handle('workspace:reveal', (_e, path) => {
+  const target = String(path ?? '')
+  if (!chosenPaths.has(target) || !existsSync(target)) return false
+  shell.showItemInFolder(target)
+  return true
+})
+
+/**
+ * Re-reads a file the user already has open, for Revert.
+ *
+ * Same gate as writing: only somewhere they pointed a dialog.
+ */
+ipcMain.handle('workspace:reread', (_e, path) => {
+  const target = String(path ?? '')
+  if (!chosenPaths.has(target)) return null
+  try {
+    return { path: target, name: basename(target), text: readFileSync(target, 'utf8') }
+  } catch (err) {
+    return { error: err.message }
+  }
 })
 
 /* ------------------------------------------------------------------ cookies */

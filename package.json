@@ -65,11 +65,18 @@
       "README.md",
       "cli.mjs"
     ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
     "win": {
       "target": [
         "nsis",
         "zip"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -81,6 +88,7 @@
         "dmg",
         "zip"
       ],
+      "icon": "build/icon.png",
       "category": "public.app-category.developer-tools"
     },
     "linux": {
@@ -88,6 +96,7 @@
         "AppImage",
         "deb"
       ],
+      "icon": "build/icon.png",
       "category": "Development"
     }
   },

@@ -39,7 +39,7 @@ import { analyse, bytes as fmtBytes } from '../lib/insights.js'
 import { tree, diff, diffSummary } from '../lib/schema.js'
 import { TARGETS, GROUPS, WHOLE_FLOW, generate, slug } from '../lib/codegen.js'
 import { SETTINGS, GROUPS as SET_GROUPS, load as loadSettings, save as saveSettings, themeAttribute } from '../lib/settings.js'
-import { serialise, parse as parseWorkspace, countIn, missingSecrets } from '../lib/workspace.js'
+import { serialise, parse as parseWorkspace, countIn, missingSecrets, matchesSaved } from '../lib/workspace.js'
 import { plan, describe as describePlan, outOfOrder } from '../lib/plan.js'
 import { fromCurl } from '../lib/curl.js'
 import { lines as jsonLines, suggestName, capturable } from '../lib/jsonlines.js'
@@ -94,7 +94,10 @@ const I = {
   eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/>',
   snow: '<path d="M12 3v18M4.5 7.5l15 9M19.5 7.5l-15 9"/>',
   table: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M9 10v9"/>',
-  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>'
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  // A floppy disk, still the only glyph everyone reads as "save".
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  revert: '<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>'
 }
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
@@ -139,7 +142,19 @@ const S = {
   find: '',
   /** Set once anything changes, cleared once the autosave lands. */
   dirty: false,
-  savedName: 'Workspace'
+  savedName: 'Workspace',
+  /**
+   * The file this workspace is being edited as, if any.
+   *
+   * What turns Save from "always ask me where" into an actual save. Set by Open
+   * and by Save as; empty for a workspace that has only ever lived in the
+   * autosave, where Save has to ask once.
+   */
+  filePath: '',
+  /** Set while a write is in flight, so the state chip can say so. */
+  saving: false,
+  /** True once what is on screen differs from the file on disk. */
+  fileDirty: false
 }
 
 const allFlows = () => S.collections.flatMap((c) => c.flows)
@@ -207,15 +222,34 @@ let booting = true
 function touch() {
   if (booting) return
   S.dirty = true
+  // Tracked separately from `dirty`, which the autosave clears. A change is
+  // still unsaved *as far as the file is concerned* until someone writes it,
+  // and conflating the two is how an indicator comes to read "everything
+  // saved" over a file twenty edits behind.
+  if (S.filePath) S.fileDirty = true
+  paintSaveState()
   clearTimeout(saveTimer)
   // Debounced: typing in a URL should not write a file per keystroke, and
   // three seconds of quiet is a natural pause.
   saveTimer = setTimeout(autosave, 3000)
 }
 
-async function autosave() {
-  if (!S.dirty || S.prefs.autosave === false) return
-  const out = await window.prism.workspace.autosave(JSON.stringify(serialise(S, { name: S.savedName })))
+/**
+ * Writes the working state to the app's own directory.
+ *
+ * `force` exists because of a real way to lose work. The debounce fires three
+ * seconds after you stop typing, and `dirty` is cleared by *any* successful
+ * write — including an explicit Save to a file. So: edit, press Ctrl+S within
+ * three seconds, close. The file has the edit; `dirty` is false, so the
+ * pending autosave declines to run and the app's own copy is left holding the
+ * state from before. On the next start that older copy is what came back, and
+ * the work looked lost even though the file was correct.
+ *
+ * Keeping the two in step is the fix, so every file save forces one of these.
+ */
+async function autosave({ force = false } = {}) {
+  if ((!S.dirty && !force) || S.prefs.autosave === false) return
+  const out = await window.prism.workspace.autosave(workspaceText())
   if (out?.ok) {
     S.dirty = false
     paintSaveState()
@@ -224,11 +258,63 @@ async function autosave() {
   }
 }
 
+/** Just the file name, which is the part anyone recognises. */
+const fileLabel = (path) => String(path).replace(/\\/g, '/').split('/').pop() || String(path)
+
+/**
+ * Which of five states the workspace is in.
+ *
+ * Named rather than derived inline in three places, because the distinction
+ * that matters is between "kept in the app" and "written to your file", and
+ * every caller has to make the same one.
+ */
+function saveState() {
+  if (S.saving) return 'saving'
+  if (S.filePath) return S.fileDirty ? 'unsaved' : 'saved'
+  return S.dirty ? 'pending' : 'autosaved'
+}
+
+/**
+ * The save control: what state the workspace is in, and the way to act on it.
+ *
+ * This used to be a six-pixel unlabelled dot with a tooltip, next to a bar
+ * offering Import, Export and Run and no Save at all. Saving existed the whole
+ * time — an autosave, Ctrl+S, two command-palette entries — and none of it was
+ * visible, which from the outside is indistinguishable from not existing. So
+ * the state is spelled out in words, beside a button that does the thing.
+ */
 function paintSaveState() {
+  const state = saveState()
   const dot = $('saveState')
-  if (!dot) return
-  dot.className = `save-state${S.dirty ? ' dirty' : ''}`
-  dot.title = S.dirty ? 'Unsaved changes — saving shortly' : 'Everything saved'
+  const btn = $('saveBtn')
+  const label = $('saveLabel')
+
+  if (dot) {
+    dot.className = `save-state is-${state}`
+    dot.title = {
+      saved: `Saved to ${S.filePath}`,
+      unsaved: `Unsaved changes — ${S.filePath}`,
+      saving: 'Saving…',
+      pending: 'Kept in the app; saving shortly. Save to a file to keep a copy you can commit.',
+      autosaved: 'Kept in the app between sessions. Save to a file to keep a copy you can commit.'
+    }[state]
+  }
+
+  if (label) {
+    label.textContent = S.filePath ? fileLabel(S.filePath) : 'Not saved to a file'
+    label.classList.toggle('muted', !S.filePath)
+    label.title = S.filePath || 'This workspace lives in the app’s own storage. Save it to a file to keep or share it.'
+  }
+
+  if (btn) {
+    btn.classList.toggle('dirty', state === 'unsaved' || state === 'pending')
+    btn.disabled = state === 'saving'
+    btn.title = S.filePath
+      ? S.fileDirty
+        ? `Save changes to ${fileLabel(S.filePath)} (Ctrl+S)`
+        : `No changes since the last save — ${fileLabel(S.filePath)} (Ctrl+S)`
+      : 'Save this workspace to a file (Ctrl+S)'
+  }
 }
 
 /** Puts a parsed workspace on screen, replacing whatever is there. */
@@ -256,9 +342,41 @@ function adopt(workspace, note) {
   if (note) toast('ok', note)
 }
 
+/**
+ * What was open last time, back on screen — and back as the same document.
+ *
+ * Two things come back, and only one of them used to. The autosave carries the
+ * *content*, including edits made after the last explicit save. The remembered
+ * path carries which file that content belongs to, and without it a restart
+ * left the work on screen but the app reading "Not saved to a file": Save
+ * asked for a location again, and the file you had been editing all week was
+ * no longer the file you were editing.
+ *
+ * Preference order when both exist: the autosave wins as the *content*,
+ * because it is never older than the file and may hold work the file has not
+ * got. The file is then compared against it to decide whether anything is
+ * outstanding, so the indicator is honest from the first paint rather than
+ * claiming "saved" over a workspace that is three edits ahead.
+ */
 async function restoreWorkspace() {
   const saved = await window.prism.workspace.restore()
-  if (!saved?.text?.trim()) return false
+  if (!saved) return false
+
+  // A file remembered with no autosave beside it: saved, closed cleanly, and
+  // opened again. Read the file itself.
+  if (!saved.text?.trim()) {
+    if (!saved.filePath) return false
+    const back = await window.prism.workspace.reread(saved.filePath)
+    if (!back?.text) return false
+    const fromFile = parseWorkspace(back.text, back.name)
+    if (!fromFile.ok || !countIn(fromFile.workspace)) return false
+    adopt(fromFile.workspace)
+    S.filePath = saved.filePath
+    S.fileDirty = false
+    S.dirty = false
+    return true
+  }
+
   const result = parseWorkspace(saved.text, 'the saved workspace')
   if (!result.ok) {
     toast('bad', result.error)
@@ -266,10 +384,27 @@ async function restoreWorkspace() {
   }
   if (!countIn(result.workspace)) return false
   adopt(result.workspace)
+
+  if (saved.filePath) {
+    S.filePath = saved.filePath
+    // Compared rather than assumed. `serialise` is deterministic for a given
+    // state, so an identical string means the file genuinely holds this
+    // workspace and the dot can say "saved" truthfully.
+    const onDisk = await window.prism.workspace.reread(saved.filePath)
+    // Compared on the authored content only. A straight text comparison can
+    // never match: `serialise` stamps a fresh `savedAt` every call, so a
+    // workspace restored moments after being saved came back flagged as
+    // having unsaved changes.
+    S.fileDirty = !onDisk?.text || !matchesSaved(onDisk.text, serialise(S, { name: S.savedName }))
+    if (S.fileDirty) {
+      toast('hold', `${fileLabel(saved.filePath)} has unsaved changes from last time — Ctrl+S writes them`)
+    }
+  }
   return true
 }
 
 async function openWorkspace() {
+  if (!(await keepOrDiscard('Opening another workspace'))) return
   const chosen = await window.prism.file.open([
     { name: 'Prism workspace', extensions: ['json'] },
     { name: 'All files', extensions: ['*'] }
@@ -281,20 +416,199 @@ async function openWorkspace() {
     return
   }
   adopt(result.workspace, `Opened ${result.workspace.name} — ${countIn(result.workspace)} requests`)
-  S.dirty = true
+  // Remembered, so Save writes back here rather than asking again. This is the
+  // whole reason `file:open` hands back a path.
+  S.filePath = chosen.path ?? ''
+  S.fileDirty = false
   touch()
+  paintSaveState()
+}
+
+/** The workspace as it would be written. */
+const workspaceText = () => JSON.stringify(serialise(S, { name: S.savedName }), null, 2)
+
+/**
+ * Save, in the sense every other application means it.
+ *
+ * Writes back to the open file when there is one, and asks only the first
+ * time. It used to ask every single time, which is what made a one-key Save
+ * behave like an export — and, together with there being no button anywhere,
+ * why the tool read as having no save at all.
+ */
+async function saveWorkspace() {
+  if (!S.filePath) return saveWorkspaceAs()
+  S.saving = true
+  paintSaveState()
+  const out = await window.prism.workspace.write({ path: S.filePath, text: workspaceText() })
+  S.saving = false
+  if (out?.ok) {
+    S.fileDirty = false
+    // Forced, so the app's own copy cannot be left older than the file it was
+    // just written to. See the note on `autosave`.
+    await autosave({ force: true })
+    S.dirty = false
+    paintSaveState()
+    toast('ok', `Saved ${fileLabel(S.filePath)}`)
+    return true
+  }
+  paintSaveState()
+  // A file that has moved, or gone read-only, must not silently do nothing.
+  toast('bad', out?.error ? `Could not save: ${out.error}` : 'Could not save that file')
+  return false
 }
 
 async function saveWorkspaceAs() {
-  const path = await window.prism.workspace.saveAs({
-    name: slug(S.savedName),
-    text: JSON.stringify(serialise(S, { name: S.savedName }), null, 2)
-  })
-  if (path) {
-    S.dirty = false
+  S.saving = true
+  paintSaveState()
+  const out = await window.prism.workspace.saveAs({ name: slug(S.savedName), text: workspaceText() })
+  S.saving = false
+  if (out?.error) {
     paintSaveState()
-    toast('ok', `Saved to ${path}`)
+    toast('bad', `Could not save: ${out.error}`)
+    return false
   }
+  if (!out?.path) {
+    paintSaveState()
+    return false
+  }
+  S.filePath = out.path
+  S.fileDirty = false
+  await autosave({ force: true })
+  S.dirty = false
+  paintSaveState()
+  toast('ok', `Saved to ${out.path}`)
+  return true
+}
+
+/** Throws away what is on screen and re-reads the file on disk. */
+async function revertWorkspace() {
+  if (!S.filePath) return
+  const yes = await ask({
+    title: `Discard changes to ${fileLabel(S.filePath)}?`,
+    blurb: 'Everything since the last save will be lost, and the file on disk reloaded in its place.',
+    danger: 'Discard and reload'
+  })
+  if (!yes) return
+  const back = await window.prism.workspace.reread(S.filePath)
+  if (!back?.text) {
+    toast('bad', back?.error ? `Could not read that file: ${back.error}` : 'That file is no longer readable')
+    return
+  }
+  const result = parseWorkspace(back.text, back.name)
+  if (!result.ok) {
+    toast('bad', result.error)
+    return
+  }
+  const path = S.filePath
+  adopt(result.workspace, `Reloaded ${fileLabel(path)}`)
+  S.filePath = path
+  S.fileDirty = false
+  paintSaveState()
+}
+
+/**
+ * Asks before an action that would leave unsaved file changes behind.
+ *
+ * Three answers, because there are three real intentions: save first, carry on
+ * regardless, or go back. Only asked when there is a file *and* it is behind —
+ * a workspace that has only ever been autosaved is not at risk, since it comes
+ * back on the next start, and prompting there would be noise.
+ *
+ * @returns {Promise<boolean>} whether the caller should proceed
+ */
+function keepOrDiscard(what) {
+  if (!S.filePath || !S.fileDirty) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let answered = false
+    const settle = (value) => {
+      answered = true
+      onSheetClose = null
+      closeSheet()
+      resolve(value)
+    }
+
+    const veil = $('veil')
+    veil.replaceChildren()
+    veil.hidden = false
+    sheetUp = true
+    // Dismissing means "take me back" — the safe reading of a dialog about
+    // losing work — and it has to hold for Escape and the backdrop too.
+    onSheetClose = () => {
+      if (!answered) resolve(false)
+    }
+
+    const body = el('div', { class: 'ask-body' }, [
+      el('div', { class: 'ask-head' }, [
+        // Amber, not red: nothing is being destroyed, and the autosave means
+        // the work itself survives either way. Only the file is behind.
+        el('span', { class: 'ask-mark is-hold', html: ico(I.alert, 17, 1.8) }),
+        el('div', {}, [
+          el('h2', { text: 'Save changes first?' }),
+          el('p', { text: `${what} will leave the changes since your last save behind.` })
+        ])
+      ]),
+      subjectGroup(I.save, fileLabel(S.filePath), S.filePath),
+      el('p', { class: 'ask-aside', text: 'Your work is kept in the app either way and comes back next time. Only this file would be out of date.' })
+    ])
+
+    const cancel = el('button', { class: 'btn plain', type: 'button', text: 'Cancel', onclick: () => settle(false) })
+    const save = el('button', { class: 'btn go', type: 'button', text: 'Save', onclick: async () => {
+      // Resolved with the save's own result: a cancelled file dialog must not
+      // be read as "saved, carry on".
+      answered = true
+      onSheetClose = null
+      const ok = await saveWorkspace()
+      closeSheet()
+      resolve(ok)
+    } })
+
+    body.append(
+      el('div', { class: 'ask-acts' }, [
+        cancel,
+        el('span', { class: 'ask-acts-gap' }),
+        el('button', { class: 'btn bad', type: 'button', text: "Don't save", onclick: () => settle(true) }),
+        save
+      ])
+    )
+
+    veil.append(el('div', { class: 'ask' }, [body]))
+    veil.onpointerdown = (e) => {
+      if (e.target === veil) closeSheet()
+    }
+    // Save takes the focus: it is the answer that loses nothing.
+    save.focus()
+  })
+}
+
+/** Opens the folder holding the saved file. */
+async function revealWorkspace() {
+  if (!S.filePath) return
+  const shown = await window.prism.workspace.reveal(S.filePath)
+  if (!shown) toast('bad', 'That file is no longer where it was saved')
+}
+
+/** The Save button's menu — everything a document needs, in one place. */
+function saveMenu() {
+  return [
+    {
+      icon: I.save,
+      label: S.filePath ? `Save ${fileLabel(S.filePath)}` : 'Save to a file…',
+      keys: 'Ctrl+S',
+      disabled: Boolean(S.filePath) && !S.fileDirty,
+      run: () => void saveWorkspace()
+    },
+    { icon: I.copy, label: 'Save as…', keys: 'Ctrl+Shift+S', run: () => void saveWorkspaceAs() },
+    { sep: true },
+    { icon: I.folder, label: 'Open a workspace…', keys: 'Ctrl+O', run: () => void openWorkspace() },
+    { icon: I.eye, label: 'Show in folder', disabled: !S.filePath, run: () => void revealWorkspace() },
+    {
+      icon: I.revert,
+      label: 'Discard changes and reload',
+      disabled: !S.filePath || !S.fileDirty,
+      danger: true,
+      run: () => void revertWorkspace()
+    }
+  ]
 }
 
 /* =================================================================== bar */
@@ -1541,10 +1855,26 @@ function countFor(req, tab) {
 }
 
 /** Redraws only what a keystroke changes, so typing does not rebuild the app. */
+/**
+ * A keystroke-cheap repaint for a field being typed into.
+ *
+ * `commit()` redraws the tree, the plane and the bench, which is far too much
+ * per keystroke — so the fields people type in fastest (the URL, every query
+ * and header row, request-level auth) came through here instead, and repainted
+ * only the preview and the one node label that changed.
+ *
+ * What was missing was `touch()`. Those handlers mutate the request and then
+ * did nothing to say so: nothing was marked dirty and no autosave was ever
+ * scheduled. Typing an endpoint, a header or a bearer token and closing the app
+ * lost the lot, unless some later action happened to call `commit()` — which is
+ * why the whole tool could look as though it did not save. `touch()` is only a
+ * flag and a debounce timer, so it is cheap enough to belong on this path.
+ */
 function live(req) {
   paintPreview(req)
   const path = document.querySelector(`.node[data-id="${req.id}"] .node-path`)
   if (path) path.innerHTML = pathLabel(req.url)
+  touch()
 }
 
 /* ---------------------------------------------------------- edit panels */
@@ -5081,6 +5411,33 @@ const HELP = [
       ])
   },
   {
+    id: 'saving',
+    label: 'Saving',
+    icon: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+    blurb: 'Two different things, and the difference matters.',
+    body: () =>
+      el('div', { class: 'doc' }, [
+        el('h4', { text: 'Your work comes back on its own' }),
+        el('p', {
+          html: 'Everything on screen is written to the app&rsquo;s own directory a few seconds after you stop typing, and restored the next time Prism opens. You do not have to do anything for this, and there is nothing to lose by closing the window. Settings &rarr; Data says where that file is and can delete it.'
+        }),
+        el('p', {
+          html: 'The file you were editing comes back with it. Reopen Prism and the same <code>.prism.json</code> is still the open document, so <kbd>Ctrl S</kbd> writes straight back to it. If you had changes that were never saved, the dot beside the name says so rather than pretending the file is current.'
+        }),
+        el('h4', { text: 'A file you can keep' }),
+        el('p', {
+          html: 'The <strong>Save</strong> button in the bar writes a <code>.prism.json</code> you own — commit it beside your code, send it to somebody, keep it in a folder per project. The first press asks where; every press after that writes back to the same file, like any other document.'
+        }),
+        el('p', {
+          html: 'The button says which file you are editing, and the dot beside it says whether that file is current: <strong>filled amber</strong> means there are changes it does not have yet, <strong>filled green</strong> means it is up to date, and <strong>hollow</strong> means this workspace has never been saved to a file at all. The arrow beside it opens Save as, Open, Show in folder, and Discard changes and reload.'
+        }),
+        el('h4', { text: 'What a saved file does not contain' }),
+        el('p', {
+          html: 'The <em>value</em> of any variable marked <strong>secret</strong> is left out, and so are response bodies. The names are kept, so opening a shared workspace tells whoever opened it what to fill in. That is what makes the file safe to commit.'
+        })
+      ])
+  },
+  {
     id: 'keys',
     label: 'Shortcuts',
     icon: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
@@ -5097,7 +5454,9 @@ const HELP = [
           el('dt', { text: 'Ctrl Shift V' }),
           el('dd', { text: 'Turn a cURL command in the clipboard into a request' }),
           el('dt', { text: 'Ctrl S' }),
-          el('dd', { text: 'Save the workspace to a file' }),
+          el('dd', { text: 'Save — writes back to the open file, and asks where only the first time' }),
+          el('dt', { text: 'Ctrl Shift S' }),
+          el('dd', { text: 'Save as — write a new file' }),
           el('dt', { text: 'Ctrl O' }),
           el('dd', { text: 'Open a saved workspace' }),
           el('dt', { text: 'Ctrl F' }),
@@ -5806,8 +6165,11 @@ function openPalette() {
     { label: 'New collection', sub: 'empty', run: newCollection },
     { label: 'Tidy the plane', sub: 'lay out in order', run: tidy },
     { label: 'Paste a cURL command', sub: 'from a browser network tab', run: pasteCurl },
+    { label: 'Save workspace', sub: 'write it back to its file', run: saveWorkspace },
+    { label: 'Save workspace as', sub: 'write a new file to keep', run: saveWorkspaceAs },
     { label: 'Open a workspace', sub: 'a saved .prism file', run: openWorkspace },
-    { label: 'Save workspace as', sub: 'write a file to keep', run: saveWorkspaceAs },
+    { label: 'Show the workspace file', sub: 'in the folder it was saved to', run: revealWorkspace },
+    { label: 'Discard changes and reload', sub: 'back to the last saved copy', run: revertWorkspace },
     { label: 'Settings', sub: 'theme, sending, safety', run: () => openSettings() },
     { label: 'Help', sub: 'how any of this works', run: () => openHelp() }
   )
@@ -5910,8 +6272,21 @@ function wire() {
   wireDrop()
   $('winMin').onclick = () => window.prism.window.minimize()
   $('winMax').onclick = () => window.prism.window.maximize()
-  $('winClose').onclick = () => window.prism.window.close()
+  $('winClose').onclick = async () => {
+    // The autosave means nothing is lost either way, so this asks only about
+    // the *file*: edits that are not in the .prism.json the user is keeping.
+    if (!(await keepOrDiscard('Closing Prism'))) return
+    // Flushed here, awaited, rather than relying on `beforeunload` — that
+    // handler fires while the renderer is being torn down and its IPC is
+    // fire-and-forget, so the last few seconds of typing were riding on a
+    // race. This path is the one people actually use.
+    clearTimeout(saveTimer)
+    await autosave({ force: true })
+    window.prism.window.close()
+  }
 
+  $('saveBtn').onclick = () => void saveWorkspace()
+  $('saveMenuBtn').onclick = (e) => openMenu(e.currentTarget, saveMenu())
   $('importBtn').onclick = doImport
   $('emptyImport').onclick = doImport
   $('exportBtn').onclick = openExport
@@ -6034,7 +6409,8 @@ function wire() {
       sheetUp ? closeSheet() : openPalette()
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault()
-      saveWorkspaceAs()
+      if (e.shiftKey) saveWorkspaceAs()
+      else saveWorkspace()
     } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
       e.preventDefault()
       pasteCurl()
@@ -6076,6 +6452,9 @@ async function boot() {
 
   commit()
   booting = false
+  // Restoring is not a change. `adopt` runs `commit`, which would otherwise
+  // leave the app dirty on every start and rewrite an identical autosave.
+  if (restored) S.dirty = false
   paintSaveState()
 
   // A last save on the way out, so the three-second debounce cannot lose the
